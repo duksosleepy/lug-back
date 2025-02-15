@@ -1,98 +1,112 @@
-import tempfile
-import uuid
-from enum import Enum
+import io
+import logging
 from pathlib import Path
-from typing import Annotated
 
-from litestar import Litestar, post
-from litestar.datastructures import UploadFile
-from litestar.exceptions import HTTPException
-from litestar.response import FileResponse
-from litestar.status_codes import HTTP_400_BAD_REQUEST
+from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
-from processors.offline_processor import DaskExcelProcessor as OfflineProcessor
-from processors.online_processor import DaskExcelProcessor as OnlineProcessor
+# Thiết lập logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
+app = FastAPI()
+
+origins = [
+    "http://localhost:3000",
+    "http://localhost",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,  # hoặc dùng ["*"] để cho phép tất cả các origin
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
-class ProcessorType(str, Enum):
-    ONLINE = "online"
-    OFFLINE = "offline"
+# Định nghĩa các extensions được phép
+ALLOWED_EXTENSIONS = {".xlsx", ".xls"}
 
 
-class ExcelAPI:
-    ALLOWED_EXTENSIONS = {".xlsx", ".xls"}
+def validate_excel_file(filename: str) -> None:
+    """Kiểm tra file có phải là file Excel không."""
+    suffix = Path(filename).suffix
+    if suffix not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Chỉ chấp nhận file Excel (.xlsx, .xls). File của bạn có đuôi: {suffix}",
+        )
 
-    @staticmethod
-    async def _save_upload_file(file: UploadFile) -> Path:
-        """Lưu file tạm thời và trả về đường dẫn"""
-        suffix = Path(file.filename).suffix
-        if suffix not in ExcelAPI.ALLOWED_EXTENSIONS:
-            raise HTTPException(
-                status_code=HTTP_400_BAD_REQUEST,
-                detail="Chỉ chấp nhận file Excel (.xlsx, .xls)",
+
+async def process_excel_file(file_content: bytes, is_online: bool) -> bytes:
+    """Xử lý file Excel dựa vào mode (online/offline)."""
+    try:
+        # Import các processor
+        if is_online:
+            from processors.online_processor import (
+                DaskExcelProcessor as Processor,
+            )
+        else:
+            from processors.offline_processor import (
+                DaskExcelProcessor as Processor,
             )
 
-        temp_dir = Path(tempfile.gettempdir())
-        temp_path = temp_dir / f"{uuid.uuid4()}{suffix}"
+        # Xử lý file
+        input_buffer = io.BytesIO(file_content)
+        output_buffer = io.BytesIO()
 
-        content = await file.read()
-        temp_path.write_bytes(content)
-        return temp_path
+        processor = Processor(input_buffer)
+        processor.process_to_buffer(output_buffer)
 
-    @staticmethod
-    def _process_excel(
-        input_path: Path, output_path: Path, processor_type: ProcessorType
-    ) -> None:
-        """Xử lý file Excel theo loại processor được chọn"""
-        try:
-            processor_class = (
-                OnlineProcessor
-                if processor_type == ProcessorType.ONLINE
-                else OfflineProcessor
-            )
-            processor = processor_class(str(input_path), str(output_path))
-            processor.run()
-        except Exception as e:
-            raise HTTPException(
-                status_code=HTTP_400_BAD_REQUEST,
-                detail=f"Lỗi khi xử lý file: {str(e)}",
-            )
-
-    @post("/process/{processor_type:str}")
-    async def process_excel(
-        self,
-        processor_type: ProcessorType,
-        file: Annotated[UploadFile, "Excel file to process"],
-    ) -> FileResponse:
-        """
-        Endpoint xử lý file Excel.
-
-        Args:
-            processor_type: Loại xử lý (online/offline)
-            file: File Excel cần xử lý
-
-        Returns:
-            FileResponse chứa file Excel đã xử lý
-        """
-        # Tạo temporary files
-        input_path = await self._save_upload_file(file)
-        output_path = input_path.parent / f"processed_{input_path.name}"
-
-        try:
-            # Xử lý file
-            self._process_excel(input_path, output_path, processor_type)
-
-            # Trả về file đã xử lý
-            return FileResponse(
-                path=output_path,
-                filename=f"processed_{file.filename}",
-                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        finally:
-            # Cleanup temporary files
-            for path in [input_path, output_path]:
-                if path.exists():
-                    path.unlink()
+        return output_buffer.getvalue()
+    except Exception as e:
+        logger.error(f"Lỗi khi xử lý file: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=400, detail=f"Lỗi khi xử lý file: {str(e)}"
+        )
 
 
-app = Litestar(route_handlers=[ExcelAPI])
+@app.post("/process/online")
+async def process_online(file: UploadFile):
+    """Endpoint xử lý file theo mode online."""
+    logger.info(f"Đang xử lý file online: {file.filename}")
+
+    # Validate file
+    validate_excel_file(file.filename)
+
+    # Đọc và xử lý file
+    content = await file.read()
+    processed_content = await process_excel_file(content, is_online=True)
+
+    # Trả về file đã xử lý
+    return StreamingResponse(
+        io.BytesIO(processed_content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{file.filename}"'
+        },
+    )
+
+
+@app.post("/process/offline")
+async def process_offline(file: UploadFile):
+    """Endpoint xử lý file theo mode offline."""
+    logger.info(f"Đang xử lý file offline: {file.filename}")
+
+    # Validate file
+    validate_excel_file(file.filename)
+
+    # Đọc và xử lý file
+    content = await file.read()
+    processed_content = await process_excel_file(content, is_online=False)
+
+    # Trả về file đã xử lý
+    return StreamingResponse(
+        io.BytesIO(processed_content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{file.filename}"'
+        },
+    )

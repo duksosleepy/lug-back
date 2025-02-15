@@ -1,122 +1,85 @@
+import io
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List, Optional, Union
+
 import dask.dataframe as dd
 import pandas as pd
 
 
+@dataclass
+class ProcessorConfig:
+    excluded_keywords: List[str] = None
+    excluded_codes: List[str] = None
+    required_columns: List[str] = None
+
+    def __post_init__(self):
+        self.excluded_keywords = (
+            [
+                "dịch vụ",
+                "online",
+                "thương mại điện tử",
+                "shopee",
+                "lazada",
+                "tiktok",
+            ]
+            if self.excluded_keywords is None
+            else self.excluded_keywords
+        )
+
+        self.excluded_codes = (
+            ["HDO", "TLO"]
+            if self.excluded_codes is None
+            else self.excluded_codes
+        )
+
+        self.required_columns = (
+            [
+                "Ngày Ct",
+                "Mã Ct",
+                "Số Ct",
+                "Mã bộ phận",
+                "Mã đơn hàng",
+                "Tên khách hàng",
+                "Số điện thoại",
+                "Tỉnh thành",
+                "Quận huyện",
+                "Phường xã",
+                "Địa chỉ",
+                "Mã hàng",
+                "Tên hàng",
+                "Imei",
+                "Số lượng",
+                "Doanh thu",
+                "Ghi chú",
+            ]
+            if self.required_columns is None
+            else self.required_columns
+        )
+
+
 class DaskExcelProcessor:
-    def __init__(self, input_file, output_file):
-        self._headers = [
-            "Ngày Ct",
-            "Mã Ct",
-            "Số Ct",
-            "Mã bộ phận",
-            "Mã đơn hàng",
-            "Tên khách hàng",
-            "Số điện thoại",
-            "Tỉnh thành",
-            "Quận huyện",
-            "Phường xã",
-            "Địa chỉ",
-            "Mã hàng",
-            "Tên hàng",
-            "Imei",
-            "Số lượng",
-            "Doanh thu",
-            "Ghi chú",
-        ]
-        self.input_file = input_file
-        self.output_file = output_file
+    def __init__(
+        self,
+        input_file: Union[str, io.BytesIO],
+        config: Optional[ProcessorConfig] = None,
+    ):
+        self.config = config or ProcessorConfig()
+        # Nếu input_file là đường dẫn, xử lý theo kiểu file hệ thống
+        if isinstance(input_file, (str, Path)):
+            self.input_file = Path(input_file)
+            if not self.input_file.exists():
+                raise FileNotFoundError(f"Input file {input_file} not found")
+            self.output_file = (
+                self.input_file.parent
+                / f"{self.input_file.stem}_final{self.input_file.suffix}"
+            )
+        else:
+            # Nếu là file-like object (ví dụ: BytesIO) thì gán trực tiếp
+            self.input_file = input_file
+            self.output_file = None
 
-    def read_input_file(self):
-        # Đọc file với các cột cần giữ định dạng string
-        df = pd.read_excel(
-            self.input_file,
-            sheet_name="Sheet1",
-            dtype={"Số Ctừ": str, "Số điện thoại": str, "Imei": str},
-        )
-
-        # Lọc bỏ các hàng không có Tên vật tư
-        df = df[df["Tên vật tư"].notna()]
-
-        # Lọc bỏ các hàng có Mã Ctừ là HDO hoặc TLO
-        df = df[~df["Mã Ctừ"].isin(["HDO", "TLO"])]
-
-        # Thay thế giá trị null trong cột Tiền doanh thu bằng 0
-        df["Tiền doanh thu"] = df["Tiền doanh thu"].fillna(0)
-
-        # Lọc bỏ các hàng không có Mã Ctừ
-        df = df[df["Mã Ctừ"].notna()]
-
-        # Danh sách các từ khóa cần lọc trong tên vật tư
-        excluded_keywords = [
-            "dịch vụ",
-            "online",
-            "thương mại điện tử",
-            "shopee",
-            "lazada",
-            "tiktok",
-        ]
-
-        # Tạo mask để lọc các hàng có chứa từ khóa cần loại bỏ
-        mask = ~df["Tên vật tư"].str.lower().str.contains(
-            "|".join(excluded_keywords), case=False, na=False
-        )
-        df = df[mask]
-
-        # Lọc bỏ các hàng có Mã vật tư là DVVC_ONL
-        df = df[df["Mã vật tư"] != "DVVC_ONL"]
-
-        # Điền số 0 cho các giá trị trống trong cột Số lượng
-        df["Số lượng"] = df["Số lượng"].fillna(0)
-
-        return dd.from_pandas(df, npartitions=4)
-
-    def split_rows_by_quantity(self, df):
-        # Chuyển từ dask DataFrame sang pandas DataFrame để xử lý
-        pdf = df.compute()
-        new_rows = []
-
-        for _, row in pdf.iterrows():
-            quantity = row["Số lượng"]
-            if pd.isna(quantity) or quantity <= 1:
-                new_rows.append(row)
-            else:
-                unit_revenue = (
-                    row["Doanh thu"] / quantity
-                    if pd.notna(row["Doanh thu"])
-                    else 0
-                )
-                for _ in range(int(quantity)):
-                    new_row = row.copy()
-                    new_row["Số lượng"] = 1
-                    new_row["Doanh thu"] = unit_revenue
-                    new_rows.append(new_row)
-
-        return dd.from_pandas(pd.DataFrame(new_rows), npartitions=4)
-
-    def create_order_id(self, row):
-        # Xử lý từng thành phần, thay thế giá trị null bằng chuỗi rỗng
-        ngay_ct = str(row["Ngày Ct"]) if pd.notna(row["Ngày Ct"]) else ""
-        ma_ct = str(row["Mã Ct"]) if pd.notna(row["Mã Ct"]) else ""
-        so_ct = str(row["Số Ct"]) if pd.notna(row["Số Ct"]) else ""
-        ma_bp = str(row["Mã bộ phận"]) if pd.notna(row["Mã bộ phận"]) else ""
-
-        # Nối các thành phần lại với nhau
-        return f"{ngay_ct}{ma_ct}{so_ct}{ma_bp}"
-
-    def format_phone_number(self, phone):
-        """Định dạng lại số điện thoại để đảm bảo giữ số 0 ở đầu"""
-        if pd.isna(phone):
-            return None
-        # Chuyển về string và đảm bảo số 0 ở đầu
-        phone_str = str(phone)
-        if (
-            phone_str.isdigit() and len(phone_str) == 9
-        ):  # Nếu số điện thoại có 9 chữ số
-            return f"0{phone_str}"
-        return phone_str
-
-    def process_data(self, df):
-        mapping = {
+        self.column_mapping = {
             "Mã Ctừ": "Mã Ct",
             "Số Ctừ": "Số Ct",
             "Tên khách hàng": "Tên khách hàng",
@@ -131,50 +94,148 @@ class DaskExcelProcessor:
             "Mã vật tư": "Mã hàng",
         }
 
-        # Đổi tên các cột theo mapping
-        df_result = df.rename(columns=mapping)
+    def read_input_file(self) -> dd.DataFrame:
+        # pd.read_excel hỗ trợ đọc từ file path hoặc file-like object
+        df = pd.read_excel(
+            self.input_file,
+            sheet_name="Sheet1",
+            dtype={"Số Ctừ": str, "Số điện thoại": str, "Imei": str},
+        )
 
-        # Chuyển sang pandas DataFrame để xử lý
+        # Lọc dữ liệu dựa trên các điều kiện
+        mask = (
+            df["Tên vật tư"].notna()
+            & ~df["Mã Ctừ"].isin(self.config.excluded_codes)
+            & df["Mã Ctừ"].notna()
+            & ~df["Tên vật tư"]
+            .str.lower()
+            .str.contains(
+                "|".join(self.config.excluded_keywords), case=False, na=False
+            )
+            & (df["Mã vật tư"] != "DVVC_ONL")
+        )
+
+        filtered_df = df[mask].copy()
+        filtered_df["Tiền doanh thu"] = filtered_df["Tiền doanh thu"].fillna(0)
+        filtered_df["Số lượng"] = filtered_df["Số lượng"].fillna(0)
+
+        return dd.from_pandas(filtered_df, npartitions=4)
+
+    @staticmethod
+    def split_rows_by_quantity(df: dd.DataFrame) -> dd.DataFrame:
+        pdf = df.compute()
+
+        if pdf.empty:
+            return dd.from_pandas(pdf, npartitions=1)
+
+        all_rows = []
+
+        # Giữ lại các hàng có số lượng <= 1
+        rows_no_expand = pdf[pdf["Số lượng"] <= 1]
+        if not rows_no_expand.empty:
+            all_rows.append(rows_no_expand)
+
+        # Tách các hàng có số lượng > 1 thành các bản sao đơn vị
+        rows_to_expand = pdf[pdf["Số lượng"] > 1]
+        if not rows_to_expand.empty:
+            expanded_list = []
+            for _, row in rows_to_expand.iterrows():
+                quantity = int(row["Số lượng"])
+                unit_revenue = (
+                    row["Doanh thu"] / quantity if quantity > 0 else 0
+                )
+                expanded_rows = pd.DataFrame([row.to_dict()] * quantity)
+                expanded_rows["Số lượng"] = 1
+                expanded_rows["Doanh thu"] = unit_revenue
+                expanded_list.append(expanded_rows)
+
+            if expanded_list:
+                expanded_df = pd.concat(expanded_list, ignore_index=True)
+                all_rows.append(expanded_df)
+
+        if all_rows:
+            for i in range(len(all_rows)):
+                all_rows[i] = all_rows[i].astype(pdf.dtypes)
+            result_df = pd.concat(all_rows, ignore_index=True)
+        else:
+            result_df = pd.DataFrame(columns=pdf.columns).astype(pdf.dtypes)
+
+        return dd.from_pandas(result_df, npartitions=4)
+
+    @staticmethod
+    def create_order_id(row: pd.Series) -> str:
+        return "".join(
+            str(row[col]) if pd.notna(row[col]) else ""
+            for col in ["Ngày Ct", "Mã Ct", "Số Ct", "Mã bộ phận"]
+        )
+
+    @staticmethod
+    def format_phone_number(phone: str) -> Optional[str]:
+        if pd.isna(phone):
+            return None
+        phone_str = str(phone)
+        return (
+            f"0{phone_str}"
+            if phone_str.isdigit() and len(phone_str) == 9
+            else phone_str
+        )
+
+    def process_data(self, df: dd.DataFrame) -> dd.DataFrame:
+        # Đổi tên các cột theo mapping
+        df_result = df.rename(columns=self.column_mapping)
         pdf_result = df_result.compute()
 
-        # Định dạng lại số điện thoại
-        pdf_result["Số điện thoại"] = pdf_result["Số điện thoại"].apply(
+        processed_df = pd.DataFrame(index=pdf_result.index)
+        processed_df["Số điện thoại"] = pdf_result["Số điện thoại"].apply(
             self.format_phone_number
         )
-
-        # Tạo mã đơn hàng
-        pdf_result["Mã đơn hàng"] = pdf_result.apply(
+        processed_df["Mã đơn hàng"] = pdf_result.apply(
             self.create_order_id, axis=1
         )
+        processed_df["Doanh thu"] = pdf_result["Doanh thu"].fillna(0)
 
-        # Đảm bảo Doanh thu không có giá trị null
-        pdf_result["Doanh thu"] = pdf_result["Doanh thu"].fillna(0)
+        for col in pdf_result.columns:
+            if col not in ["Số điện thoại", "Mã đơn hàng", "Doanh thu"]:
+                processed_df[col] = pdf_result[col]
 
-        # Tạo DataFrame mới chỉ với các cột cần thiết theo thứ tự trong _headers
-        final_df = pd.DataFrame(columns=self._headers)
-
-        # Copy dữ liệu từ các cột tương ứng
-        for col in self._headers:
-            if col in pdf_result.columns:
-                final_df[col] = pdf_result[col]
+        final_df = pd.DataFrame(columns=self.config.required_columns)
+        for col in self.config.required_columns:
+            if col in processed_df.columns:
+                final_df[col] = processed_df[col]
             else:
-                final_df[col] = None
+                final_df[col] = pd.NA
 
-        # Chuyển kết quả thành dask DataFrame
         result_dask = dd.from_pandas(final_df, npartitions=4)
-
-        # Thực hiện tách hàng theo số lượng
         return self.split_rows_by_quantity(result_dask)
 
-    def save_output_file(self, df):
-        # Xuất file và giữ định dạng cột số
-        df.compute().to_excel(self.output_file, index=False)
+    def save_output_file(self, df: dd.DataFrame) -> None:
+        # Phương thức này chỉ dùng khi output_file đã được xác định (xử lý file trên đĩa)
+        if self.output_file:
+            df.compute().to_excel(self.output_file, index=False)
+        else:
+            raise ValueError(
+                "Output file path is not set for in-memory processing."
+            )
 
-    def run(self):
+    def process_to_buffer(self, output_buffer: io.BytesIO) -> None:
+        """
+        Xử lý file Excel và ghi kết quả vào output_buffer.
+        Phương thức này hỗ trợ xử lý in-memory.
+        """
+        df = self.read_input_file()
+        df_result = self.process_data(df)
+        with pd.ExcelWriter(output_buffer, engine="openpyxl") as writer:
+            df_result.compute().to_excel(writer, index=False)
+        output_buffer.seek(0)
+
+    def run(self) -> None:
+        # Phương thức chạy kiểu cũ (xử lý từ file và lưu ra file hệ thống)
         try:
             df = self.read_input_file()
             df_result = self.process_data(df)
             self.save_output_file(df_result)
             print(f"File {self.output_file} đã được tạo thành công!")
+            return self.output_file
         except Exception as e:
             print(f"Có lỗi xảy ra: {str(e)}")
+            raise

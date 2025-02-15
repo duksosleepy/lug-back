@@ -1,11 +1,13 @@
-from typing import Dict, List
+import io
+from pathlib import Path
+from typing import Dict, List, Union
 
 import dask.dataframe as dd
 import pandas as pd
 
 
 class DaskExcelProcessor:
-    def __init__(self, input_file: str, output_file: str):
+    def __init__(self, input_file: Union[str, io.BytesIO]):
         self._headers: List[str] = [
             "Ngày Ct",
             "Mã Ct",
@@ -25,8 +27,19 @@ class DaskExcelProcessor:
             "Doanh thu",
             "Ghi chú",
         ]
-        self.input_file = input_file
-        self.output_file = output_file
+        # Nếu input_file là đường dẫn thì sử dụng file hệ thống, ngược lại xử lý in-memory
+        if isinstance(input_file, (str, Path)):
+            self.input_file = Path(input_file)
+            if not self.input_file.exists():
+                raise FileNotFoundError(f"Input file {input_file} not found")
+            self.output_file = (
+                self.input_file.parent
+                / f"{self.input_file.stem}_final{self.input_file.suffix}"
+            )
+        else:
+            self.input_file = input_file
+            self.output_file = None
+
         self.column_mapping: Dict[str, str] = {
             "mã ctừ": "Mã Ct",
             "số ctừ": "Số Ct",
@@ -47,19 +60,17 @@ class DaskExcelProcessor:
         self.excluded_product_names = ["BAO LÌ XÌ"]
 
     def read_input_file(self) -> dd.DataFrame:
-        """Đọc và tiền xử lý dữ liệu từ file Excel"""
+        """Đọc và tiền xử lý dữ liệu từ file Excel (hỗ trợ file path hoặc file-like object)"""
         df = pd.read_excel(
             self.input_file,
             sheet_name="Sheet1",
             dtype={"Số Ctừ": str, "Số điện thoại": str, "Imei": str},
         )
 
-        # Xử lý dữ liệu ban đầu
+        # Lọc các hàng có tên vật tư và thực hiện các bước loại trừ
         df = (
-            df[df["Tên vật tư"].notna()]  # Lọc các hàng có tên vật tư
-            .pipe(
-                self._filter_excluded_data
-            )  # Lọc dữ liệu theo điều kiện loại trừ
+            df[df["Tên vật tư"].notna()]
+            .pipe(self._filter_excluded_data)
             .assign(
                 **{"Tiền doanh thu": lambda x: x["Tiền doanh thu"].fillna(0)}
             )
@@ -82,7 +93,7 @@ class DaskExcelProcessor:
             "|".join(self.excluded_product_codes), case=False, na=False
         )
 
-        # Lọc tên vật tư (bao lì xì)
+        # Lọc tên vật tư (ví dụ: "BAO LÌ XÌ")
         product_name_mask = ~df["Tên vật tư"].str.lower().str.contains(
             "|".join(self.excluded_product_names), case=False, na=False
         )
@@ -94,26 +105,21 @@ class DaskExcelProcessor:
         pdf = df.compute()
         new_rows = []
 
-        for _, row in pdf.iterrows():
+        for idx, row in pdf.iterrows():
             quantity = row["Số lượng"]
             if pd.isna(quantity) or quantity <= 1:
-                new_rows.append(row)
+                new_rows.append(pd.Series(row))
             else:
                 unit_revenue = (
                     row["Doanh thu"] / quantity
                     if pd.notna(row["Doanh thu"])
                     else 0
                 )
-                new_rows.extend(
-                    [
-                        {
-                            **row.to_dict(),
-                            "Số lượng": 1,
-                            "Doanh thu": unit_revenue,
-                        }
-                        for _ in range(int(quantity))
-                    ]
-                )
+                for _ in range(int(quantity)):
+                    new_row = row.copy()
+                    new_row["Số lượng"] = 1
+                    new_row["Doanh thu"] = unit_revenue
+                    new_rows.append(new_row)
 
         return dd.from_pandas(pd.DataFrame(new_rows), npartitions=4)
 
@@ -131,39 +137,60 @@ class DaskExcelProcessor:
 
     def process_data(self, df: dd.DataFrame) -> dd.DataFrame:
         """Xử lý và chuyển đổi dữ liệu"""
-        # Đổi tên cột
+        # Đổi tên cột theo mapping không phân biệt chữ hoa/chữ thường
         df_result = df.rename(
             columns=lambda x: self.column_mapping.get(x.lower(), x)
         )
         pdf_result = df_result.compute()
 
-        # Xử lý số điện thoại và doanh thu
+        # Xử lý số điện thoại và đảm bảo doanh thu không null
         pdf_result["Số điện thoại"] = pdf_result["Số điện thoại"].apply(
             self._format_phone_number
         )
         pdf_result["Doanh thu"] = pdf_result["Doanh thu"].fillna(0)
 
-        # Tạo DataFrame mới với các cột cần thiết
-        final_df = pd.DataFrame(
-            {
-                col: pdf_result.get(col, pd.Series([None] * len(pdf_result)))
-                for col in self._headers
-            }
-        )
+        # Tạo DataFrame mới với các cột đầu ra theo thứ tự yêu cầu
+        final_df = pd.DataFrame(columns=self._headers)
+        for col in self._headers:
+            if col in pdf_result.columns:
+                final_df[col] = pdf_result[col]
+            else:
+                final_df[col] = pd.NA
 
         result_dask = dd.from_pandas(final_df, npartitions=4)
         return self._split_rows_by_quantity(result_dask)
 
     def save_output_file(self, df: dd.DataFrame) -> None:
-        """Lưu kết quả ra file Excel"""
-        df.compute().to_excel(self.output_file, index=False)
+        """Lưu kết quả ra file Excel (chỉ áp dụng khi xử lý theo file hệ thống)"""
+        if self.output_file:
+            df.compute().to_excel(self.output_file, index=False)
+        else:
+            raise ValueError(
+                "Output file path is not set for in-memory processing."
+            )
 
-    def run(self) -> None:
-        """Chạy toàn bộ quy trình xử lý"""
+    def process_to_buffer(self, output_buffer: io.BytesIO) -> None:
+        """
+        Xử lý file Excel và ghi kết quả vào output_buffer.
+        Phương thức này hỗ trợ xử lý in-memory, không ghi file ra đĩa.
+        """
+        df = self.read_input_file()
+        df_result = self.process_data(df)
+        with pd.ExcelWriter(output_buffer, engine="openpyxl") as writer:
+            df_result.compute().to_excel(writer, index=False)
+        output_buffer.seek(0)
+
+    def run(self) -> Path:
+        """
+        Chạy toàn bộ quy trình xử lý theo kiểu file hệ thống và trả về đường dẫn file output.
+        Dùng trong trường hợp đầu vào là file path.
+        """
         try:
             df = self.read_input_file()
             df_result = self.process_data(df)
             self.save_output_file(df_result)
             print(f"File {self.output_file} đã được tạo thành công!")
+            return self.output_file
         except Exception as e:
             print(f"Có lỗi xảy ra: {str(e)}")
+            raise
