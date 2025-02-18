@@ -1,3 +1,4 @@
+# offline_processor.py
 import io
 from dataclasses import dataclass
 from pathlib import Path
@@ -103,6 +104,7 @@ class DaskExcelProcessor:
         )
 
         # Lọc dữ liệu dựa trên các điều kiện
+        excluded_product_codes = ["THUNG", "DVVC_ONL", "PBHDT"]
         mask = (
             df["Tên vật tư"].notna()
             & ~df["Mã Ctừ"].isin(self.config.excluded_codes)
@@ -112,7 +114,10 @@ class DaskExcelProcessor:
             .str.contains(
                 "|".join(self.config.excluded_keywords), case=False, na=False
             )
-            & (df["Mã vật tư"] != "DVVC_ONL")
+            & ~df["Mã vật tư"].str.contains(
+                "|".join(excluded_product_codes), case=False, na=False
+            )
+            & (df["Loại vật tư"].fillna("").str.upper() != "VPP")
         )
 
         filtered_df = df[mask].copy()

@@ -93,12 +93,17 @@ class DaskExcelProcessor:
             "|".join(self.excluded_product_codes), case=False, na=False
         )
 
-        # Lọc tên vật tư (ví dụ: "BAO LÌ XÌ")
+        # Lọc tên vật tư
         product_name_mask = ~df["Tên vật tư"].str.lower().str.contains(
             "|".join(self.excluded_product_names), case=False, na=False
         )
 
-        return df[customer_mask & product_code_mask & product_name_mask]
+        # Thêm điều kiện lọc loại vật tư VPP
+        vpp_mask = df["Loại vật tư"].fillna("").str.upper() != "VPP"
+
+        return df[
+            customer_mask & product_code_mask & product_name_mask & vpp_mask
+        ]
 
     def _split_rows_by_quantity(self, df: dd.DataFrame) -> dd.DataFrame:
         """Tách các hàng dựa trên số lượng"""
