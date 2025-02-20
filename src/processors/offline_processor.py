@@ -29,7 +29,7 @@ class ProcessorConfig:
         )
 
         self.excluded_codes = (
-            ["HDO", "TLO"]
+            ["HDO", "TLO", "HD"]
             if self.excluded_codes is None
             else self.excluded_codes
         )
@@ -104,7 +104,7 @@ class DaskExcelProcessor:
         )
 
         # Lọc dữ liệu dựa trên các điều kiện
-        excluded_product_codes = ["THUNG", "DVVC_ONL", "PBHDT"]
+        excluded_product_codes = ["THUNG", "DVVC_ONL", "PBHDT", "TUINILONPK"]
         mask = (
             df["Tên vật tư"].notna()
             & ~df["Mã Ctừ"].isin(self.config.excluded_codes)
