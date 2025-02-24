@@ -30,7 +30,7 @@ class ExcelAPI(Controller):
         if suffix not in ExcelAPI.ALLOWED_EXTENSIONS:
             raise HTTPException(
                 status_code=HTTP_400_BAD_REQUEST,
-                detail=f"Chỉ chấp nhận file Excel (.xlsx, .xls). File của bạn có đuôi: {suffix}",
+                detail=f"Chỉ chấp nhận file Excel (.xlsx, .xls). File của bạn có đuôi: {suffix}",  # noqa: E501
             )
 
     @staticmethod
@@ -102,7 +102,7 @@ class ExcelAPI(Controller):
                 content=processed_content,
                 media_type="application/vnd.ms-excel",
                 headers={
-                    "Content-Disposition": f'attachment; filename="{file.filename}"'
+                    "Content-Disposition": f'attachment; filename="{file.filename}"'  # noqa: E501
                 },
             )
         except Exception as e:

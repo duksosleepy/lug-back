@@ -1,10 +1,10 @@
+import base64
 import io
 import logging
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 
 # Thiết lập logging
 logging.basicConfig(level=logging.DEBUG)
@@ -26,7 +26,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # Định nghĩa các extensions được phép
 ALLOWED_EXTENSIONS = {".xlsx", ".xls"}
 
@@ -41,10 +40,20 @@ def validate_excel_file(filename: str) -> None:
         )
 
 
-async def process_excel_file(file_content: bytes, is_online: bool) -> bytes:
-    """Xử lý file Excel dựa vào mode (online/offline)."""
+async def process_excel_file(file_content: bytes, is_online: bool) -> dict:
+    """
+    Xử lý file Excel theo mode online/offline.
+
+    - Với online mode: gọi processors.online_processor, hàm process_to_buffer trả về
+      tuple (valid_content, invalid_content, invalid_count).
+    - Với offline mode: gọi processors.offline_processor, hàm process_to_buffer ghi dữ liệu vào output_buffer.
+
+    Trả về JSON với các trường:
+      - valid_file: base64 string của file hợp lệ.
+      - invalid_file: base64 string của file không hợp lệ (nếu có, ngược lại là None).
+      - invalid_count: số lượng bản ghi không hợp lệ.
+    """
     try:
-        # Import các processor
         if is_online:
             from processors.online_processor import (
                 DaskExcelProcessor as Processor,
@@ -54,14 +63,39 @@ async def process_excel_file(file_content: bytes, is_online: bool) -> bytes:
                 DaskExcelProcessor as Processor,
             )
 
-        # Xử lý file
         input_buffer = io.BytesIO(file_content)
+        processor = Processor(input_buffer)
         output_buffer = io.BytesIO()
 
-        processor = Processor(input_buffer)
-        processor.process_to_buffer(output_buffer)
+        # Gọi hàm process_to_buffer
+        result = processor.process_to_buffer(output_buffer)
+        if result is not None:
+            # Online mode: process_to_buffer trả về tuple
+            valid_content, invalid_content, invalid_count = result
+        else:
+            # Offline mode: dữ liệu được ghi vào output_buffer
+            valid_content = output_buffer.getvalue()
+            invalid_content = None
+            invalid_count = 0
 
-        return output_buffer.getvalue()
+        # Mã hóa nội dung file sang base64
+        valid_file_b64 = (
+            base64.b64encode(valid_content).decode("utf-8")
+            if valid_content
+            else None
+        )
+        invalid_file_b64 = (
+            base64.b64encode(invalid_content).decode("utf-8")
+            if invalid_content
+            else None
+        )
+
+        return {
+            "valid_file": valid_file_b64,
+            "invalid_file": invalid_file_b64,
+            "invalid_count": invalid_count,
+        }
+
     except Exception as e:
         logger.error(f"Lỗi khi xử lý file: {str(e)}", exc_info=True)
         raise HTTPException(
@@ -73,41 +107,17 @@ async def process_excel_file(file_content: bytes, is_online: bool) -> bytes:
 async def process_online(file: UploadFile):
     """Endpoint xử lý file theo mode online."""
     logger.info(f"Đang xử lý file online: {file.filename}")
-
-    # Validate file
     validate_excel_file(file.filename)
-
-    # Đọc và xử lý file
     content = await file.read()
-    processed_content = await process_excel_file(content, is_online=True)
-
-    # Trả về file đã xử lý
-    return StreamingResponse(
-        io.BytesIO(processed_content),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={
-            "Content-Disposition": f'attachment; filename="{file.filename}"'
-        },
-    )
+    result = await process_excel_file(content, is_online=True)
+    return result
 
 
 @app.post("/process/offline")
 async def process_offline(file: UploadFile):
     """Endpoint xử lý file theo mode offline."""
     logger.info(f"Đang xử lý file offline: {file.filename}")
-
-    # Validate file
     validate_excel_file(file.filename)
-
-    # Đọc và xử lý file
     content = await file.read()
-    processed_content = await process_excel_file(content, is_online=False)
-
-    # Trả về file đã xử lý
-    return StreamingResponse(
-        io.BytesIO(processed_content),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={
-            "Content-Disposition": f'attachment; filename="{file.filename}"'
-        },
-    )
+    result = await process_excel_file(content, is_online=False)
+    return result
