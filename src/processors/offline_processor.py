@@ -120,7 +120,9 @@ class DaskExcelProcessor:
                         ["2.5.1 TCMN COI", "1.2.5 DDDL BAO BI"]
                     )
                 )
-                & (df["Doanh thu"].isna() | (df["Doanh thu"] == 0))
+                & (
+                    df["Tiền doanh thu"].isna() | (df["Tiền doanh thu"] == 0)
+                )  # Sửa từ "Doanh thu" thành "Tiền doanh thu"
             )
             & ~df["Mã Ctừ"].str.contains("HD", na=False)
             & ~df["Tên vật tư"]

@@ -1,1 +1,31 @@
-["^ ","~:classpath",["~#set",[]],"~:project-hash","","~:project-root","C:\\Users\\Khoi Nguyen\\Desktop\\lug-back","~:kondo-config-hash","a01780c04a39353f043153689509aaf1a75bc17e7e349782cc644a6e715e6ab4","~:dependency-scheme","jar","~:analysis",null,"~:analysis-checksums",["^ "],"~:project-analysis-type","~:project-and-full-dependencies","~:version",12,"~:stubs-generation-namespaces",["^1",[]]]
+[
+    "^ ",
+    "~:classpath",
+    [
+        "~#set",
+        []
+    ],
+    "~:project-hash",
+    "",
+    "~:project-root",
+    "C:\\Users\\Khoi Nguyen\\Desktop\\lug-back",
+    "~:kondo-config-hash",
+    "a01780c04a39353f043153689509aaf1a75bc17e7e349782cc644a6e715e6ab4",
+    "~:dependency-scheme",
+    "jar",
+    "~:analysis",
+    null,
+    "~:analysis-checksums",
+    [
+        "^ "
+    ],
+    "~:project-analysis-type",
+    "~:project-and-full-dependencies",
+    "~:version",
+    12,
+    "~:stubs-generation-namespaces",
+    [
+        "^1",
+        []
+    ]
+]
