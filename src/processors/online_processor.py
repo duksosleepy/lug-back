@@ -5,6 +5,7 @@ from typing import Dict, List, Tuple, Union
 
 import dask.dataframe as dd
 import pandas as pd
+import phonenumbers  # Thêm thư viện phonenumbers
 
 
 class DaskExcelProcessor:
@@ -111,27 +112,72 @@ class DaskExcelProcessor:
 
     @staticmethod
     def _is_valid_phone(phone: str) -> bool:
+        """
+        Kiểm tra số điện thoại có hợp lệ không sử dụng thư viện phonenumbers
+        Chỉ chấp nhận số điện thoại Việt Nam 10 số (bắt đầu bằng số 0)
+        """
         if pd.isna(phone):
             return False
+
+        # Loại bỏ các ký tự không phải số
         phone_str = str(phone).strip()
         phone_str = re.sub(r"[-()\s\.]", "", phone_str)
-        patterns = [
-            r"^(0|84|\+84)?(3[2-9]|5[2689]|7[06-9]|8[1-9]|9[0-9])[0-9]{7}$",
-            r"^(0|84|\+84)?(2[0-9]{1})[0-9]{8}$",
-        ]
-        return any(re.match(pattern, phone_str) for pattern in patterns)
+
+        # Kiểm tra số điện thoại đặc biệt
+        if phone_str in ["09999999999", "090000000"]:
+            return True
+
+        # Chuẩn hóa số điện thoại
+        if phone_str.startswith("+84"):
+            phone_str = "0" + phone_str[3:]
+        elif phone_str.startswith("84") and not phone_str.startswith("0"):
+            phone_str = "0" + phone_str[2:]
+
+        # Kiểm tra độ dài phải đúng 10 số và bắt đầu bằng số 0
+        if len(phone_str) != 10 or not phone_str.startswith("0"):
+            return False
+
+        try:
+            # Parse số điện thoại với mã quốc gia Việt Nam (VN)
+            parsed_number = phonenumbers.parse(phone_str, "VN")
+            # Kiểm tra có phải số điện thoại hợp lệ không
+            return phonenumbers.is_valid_number(parsed_number)
+        except Exception:
+            return False
 
     @staticmethod
     def _format_phone_number(phone: str) -> str:
+        """
+        Format số điện thoại thành định dạng chuẩn 10 số của Việt Nam
+        """
         if pd.isna(phone):
             return None
+
+        # Loại bỏ các ký tự không phải số
         phone_str = str(phone).strip()
         phone_str = re.sub(r"[-()\s\.]", "", phone_str)
+
+        # Giữ nguyên số điện thoại đặc biệt
+        if phone_str in ["09999999999", "090000000"]:
+            return phone_str
+
+        # Chuẩn hóa số điện thoại
         if phone_str.startswith("+84"):
             phone_str = "0" + phone_str[3:]
-        elif phone_str.startswith("84"):
+        elif phone_str.startswith("84") and not phone_str.startswith("0"):
             phone_str = "0" + phone_str[2:]
-        return phone_str
+
+        # Kiểm tra độ dài và tính hợp lệ
+        try:
+            parsed_number = phonenumbers.parse(phone_str, "VN")
+            if (
+                phonenumbers.is_valid_number(parsed_number)
+                and len(phone_str) == 10
+            ):
+                return phone_str
+            return None
+        except Exception:
+            return None
 
     def _process_final(
         self, df: pd.DataFrame, format_phone: bool = True
@@ -164,17 +210,53 @@ class DaskExcelProcessor:
             columns=lambda x: self.column_mapping.get(x.lower(), x)
         )
         pdf_result = df_result.compute()
+
+        # Xác định các record có số điện thoại hợp lệ
         pdf_result["is_valid_phone"] = pdf_result["Số điện thoại"].apply(
             self._is_valid_phone
         )
+
+        # Tách thành hai DataFrame: valid và invalid
         valid_df = pdf_result[pdf_result["is_valid_phone"]].copy()
         invalid_df = pdf_result[~pdf_result["is_valid_phone"]].copy()
-        final_valid_df = self._process_final(valid_df, format_phone=True)
-        final_invalid_df = self._process_final(invalid_df, format_phone=False)
+
+        # Đảm bảo không có số điện thoại nào bị sót ở invalid_df
+        # Kiểm tra lại một lần nữa để chắc chắn
+        final_valid_check = []
+        final_invalid_check = []
+
+        for _, row in valid_df.iterrows():
+            if self._is_valid_phone(row["Số điện thoại"]):
+                final_valid_check.append(row)
+            else:
+                final_invalid_check.append(row)
+
+        for _, row in invalid_df.iterrows():
+            final_invalid_check.append(row)
+
+        # Tạo DataFrame từ danh sách
+        final_valid_df = (
+            pd.DataFrame(final_valid_check) if final_valid_check else valid_df
+        )
+        additional_invalid_df = (
+            pd.DataFrame(final_invalid_check)
+            if final_invalid_check
+            else invalid_df
+        )
+
+        # Xử lý riêng cho từng luồng:
+        final_valid_df = self._process_final(final_valid_df, format_phone=True)
+        final_invalid_df = self._process_final(
+            additional_invalid_df, format_phone=False
+        )
+
+        # Chuyển về dask DataFrame và xử lý
         valid_dask = dd.from_pandas(final_valid_df, npartitions=4)
         valid_dask = self._split_rows_by_quantity(valid_dask)
+
         invalid_dask = dd.from_pandas(final_invalid_df, npartitions=4)
         invalid_dask = self._split_rows_by_quantity(invalid_dask)
+
         return valid_dask, invalid_dask.compute()
 
     def process_to_buffer(
@@ -216,3 +298,11 @@ class DaskExcelProcessor:
         except Exception as e:
             print(f"Có lỗi xảy ra: {str(e)}")
             raise
+
+    def save_output_file(self, df: dd.DataFrame) -> None:
+        if self.output_file:
+            df.compute().to_excel(self.output_file, index=False)
+        else:
+            raise ValueError(
+                "Output file path is not set for in-memory processing."
+            )
