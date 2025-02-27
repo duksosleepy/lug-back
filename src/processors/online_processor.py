@@ -57,7 +57,13 @@ class DaskExcelProcessor:
             "mã vật tư": "Mã hàng",
         }
         self.excluded_customer_keywords = ["BƯU ĐIỆN"]
-        self.excluded_product_codes = ["PBHDT"]
+        # Thêm các từ khóa mới vào excluded_product_codes
+        self.excluded_product_codes = [
+            "PBHDT",
+            "THUNG",
+            "DVVC_ONL",
+            "TUINILONPK",
+        ]
         self.excluded_product_names = ["BAO LÌ XÌ"]
 
     def read_input_file(self) -> dd.DataFrame:

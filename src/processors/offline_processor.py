@@ -99,6 +99,15 @@ class DaskExcelProcessor:
 
         # Chỉ giữ lại các mã chứng từ được chỉ định
         valid_document_codes = ["BL", "BLK", "HG", "TG"]
+        # Danh sách các từ khóa bị loại trừ trong mã vật tư
+        excluded_product_codes = [
+            "DV_GHEMASSAGE",
+            "THUNG",
+            "DVVC_ONL",
+            "PBHDT",
+            "TUINILONPK",
+        ]
+
         mask = (
             df["Mã Ctừ"].isin(valid_document_codes)
             & ~(
@@ -112,9 +121,11 @@ class DaskExcelProcessor:
             )
             & df["Tên vật tư"].notna()
             & ~df["Mã vật tư"].str.contains(
-                "DV_GHEMASSAGE", case=False, na=False
+                "|".join(excluded_product_codes), case=False, na=False
             )
-            & ~df["Loại vật tư"].isin(["NUOC", "TPCN", "KEM"])
+            & ~df["Loại vật tư"].isin(
+                ["NUOC", "TPCN", "KEM", "VPP"]
+            )  # Thêm VPP vào danh sách loại trừ
             & ~(
                 (
                     df["Mã nhóm vật tư"].isin(
