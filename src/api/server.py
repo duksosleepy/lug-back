@@ -90,11 +90,10 @@ async def send_error_file_email(
                     to=ERROR_NOTIFICATION_EMAILS,
                     subject=f"File số điện thoại không hợp lệ - {original_filename}",
                     body=f"""
-                    <p>Kính gửi,</p>
-                    <p>Đính kèm là file chứa các số điện thoại không hợp lệ từ quá trình xử lý {process_type}.</p>
+                    <p>Dear,</p>
+                    <p>File chứa các số điện thoại không hợp lệ từ quá trình xử lý {process_type}.</p>
                     <p>File gốc: {original_filename}</p>
-                    <p>Trân trọng,</p>
-                    <p>Hệ thống tự động</p>
+                    <p>Hệ thống tự động, vui lòng không reply lại email này.</p>
                     """,
                     html=True,
                 )
