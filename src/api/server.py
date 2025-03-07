@@ -5,9 +5,8 @@ import os
 import tempfile
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
 
 # Thiết lập logging
 logging.basicConfig(level=logging.DEBUG)
@@ -33,7 +32,12 @@ app.add_middleware(
 ALLOWED_EXTENSIONS = {".xlsx", ".xls"}
 
 # Email để gửi file lỗi
-ERROR_NOTIFICATION_EMAIL = "songkhoi123@gmail.com"
+ERROR_NOTIFICATION_EMAILS = [
+    "songkhoi123@gmail.com",
+    "nam.nguyen@lug.vn",
+    "dang.le@sangtam.com",
+    "tan.nguyen@sangtam.com",
+]
 
 
 def validate_excel_file(filename: str) -> None:
@@ -83,7 +87,7 @@ async def send_error_file_email(
             # Tạo client và gửi email
             with EmailClient(**config) as client:
                 msg = client.create_message(
-                    to=ERROR_NOTIFICATION_EMAIL,
+                    to=ERROR_NOTIFICATION_EMAILS,
                     subject=f"File số điện thoại không hợp lệ - {original_filename}",
                     body=f"""
                     <p>Kính gửi,</p>
@@ -102,8 +106,9 @@ async def send_error_file_email(
                 result = client.send(msg)
 
                 if result:
+                    recipients_str = ", ".join(ERROR_NOTIFICATION_EMAILS)
                     logger.info(
-                        f"Đã gửi file lỗi '{error_filename}' qua email thành công"
+                        f"Đã gửi file lỗi '{error_filename}' qua email thành công đến: {recipients_str}"
                     )
                 else:
                     logger.error(
@@ -215,30 +220,44 @@ async def process_offline(file: UploadFile):
 
 
 @app.post("/process/mapping")
-async def process_mapping(data_file: UploadFile, mapping_file: UploadFile):
+async def process_mapping(
+    firstFile: UploadFile = File(...), secondFile: UploadFile = File(...)
+):
     """
     Endpoint ánh xạ mã hàng và tên hàng dựa trên file mapping.
 
     Nhận hai file:
-    - data_file: File dữ liệu cần ánh xạ
-    - mapping_file: File chứa bảng ánh xạ mã hàng/tên hàng cũ và mới (mmmc.xlsx)
+    - firstFile: File dữ liệu cần ánh xạ (raw file từ frontend)
+    - secondFile: File chứa bảng ánh xạ mã hàng/tên hàng cũ và mới (warranty file từ frontend)
 
-    Trả về file Excel đã ánh xạ trực tiếp để frontend có thể tải về.
+    Trả về JSON chứa base64 của file đã ánh xạ.
     """
+    # Kiểm tra xem đã nhận được các tệp chưa
+    if not firstFile:
+        raise HTTPException(status_code=400, detail="firstFile là bắt buộc")
+    if not secondFile:
+        raise HTTPException(status_code=400, detail="secondFile là bắt buộc")
+
     logger.info(
-        f"Đang xử lý ánh xạ mã hàng. File dữ liệu: {data_file.filename}, File mapping: {mapping_file.filename}"
+        f"Đang xử lý ánh xạ mã hàng. File dữ liệu: {firstFile.filename}, File mapping: {secondFile.filename}"
     )
 
     # Kiểm tra định dạng file
-    validate_excel_file(data_file.filename)
-    validate_excel_file(mapping_file.filename)
+    validate_excel_file(firstFile.filename)
+    validate_excel_file(secondFile.filename)
 
     try:
         from processors.product_mapping_processor import ProductMappingProcessor
 
         # Đọc nội dung file
-        data_content = await data_file.read()
-        mapping_content = await mapping_file.read()
+        data_content = await firstFile.read()
+        mapping_content = await secondFile.read()
+
+        # Đảm bảo nội dung không rỗng
+        if not data_content:
+            raise HTTPException(status_code=400, detail="File dữ liệu trống")
+        if not mapping_content:
+            raise HTTPException(status_code=400, detail="File mapping trống")
 
         # Tạo buffer cho các file đầu vào và đầu ra
         data_buffer = io.BytesIO(data_content)
@@ -247,22 +266,36 @@ async def process_mapping(data_file: UploadFile, mapping_file: UploadFile):
 
         # Xử lý ánh xạ
         processor = ProductMappingProcessor(data_buffer, mapping_buffer)
-        processor.process_to_buffer(output_buffer)
+        process_info = processor.process_to_buffer(output_buffer)
 
-        # Đặt lại vị trí buffer về đầu
+        # Lấy thông tin về số lượng bản ghi đã ánh xạ
+        matched_count = (
+            process_info.get("matched_count", 0)
+            if isinstance(process_info, dict)
+            else 0
+        )
+        total_count = (
+            process_info.get("total_count", 0)
+            if isinstance(process_info, dict)
+            else 0
+        )
+
+        # Mã hóa nội dung file sang base64
         output_buffer.seek(0)
+        mapped_file_b64 = base64.b64encode(output_buffer.getvalue()).decode(
+            "utf-8"
+        )
 
         # Tạo tên file kết quả
-        output_filename = f"{data_file.filename.split('.')[0]}_mapped.xlsx"
+        output_filename = f"{Path(firstFile.filename).stem}_mapped.xlsx"
 
-        # Trả về file Excel trực tiếp
-        return Response(
-            content=output_buffer.getvalue(),
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={
-                "Content-Disposition": f'attachment; filename="{output_filename}"'
-            },
-        )
+        # Trả về JSON thay vì file trực tiếp
+        return {
+            "resultFile": mapped_file_b64,
+            "filename": output_filename,
+            "matchedCount": matched_count,
+            "totalCount": total_count,
+        }
 
     except Exception as e:
         logger.error(f"Lỗi khi ánh xạ mã hàng: {str(e)}", exc_info=True)

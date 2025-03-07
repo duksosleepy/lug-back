@@ -283,12 +283,15 @@ class ProductMappingProcessor:
             logger.error(f"Lỗi khi đọc file dữ liệu: {str(e)}", exc_info=True)
             raise
 
-    def process_to_buffer(self, output_buffer: io.BytesIO) -> None:
+    def process_to_buffer(self, output_buffer: io.BytesIO) -> dict:
         """
         Xử lý file dữ liệu dựa trên file mapping và ghi vào buffer đầu ra.
 
         Args:
             output_buffer: BytesIO buffer để ghi dữ liệu đã xử lý
+
+        Returns:
+            dict: Thông tin về quá trình ánh xạ (matched_count, total_count)
         """
         try:
             # Đọc dữ liệu mapping và dữ liệu
@@ -311,15 +314,18 @@ class ProductMappingProcessor:
             logger.info(f"Đã tạo mapping cho {len(code_mapping)} mã hàng")
 
             # Áp dụng mapping vào dữ liệu
+            matched_count = 0
+            total_count = len(data_df)
+
             if "Mã hàng" in data_df.columns:
                 # Tạo cột tạm chứa các giá trị đã ánh xạ
                 data_df["Mã hàng_mới"] = data_df["Mã hàng"].map(code_mapping)
                 data_df["Tên hàng_mới"] = data_df["Mã hàng"].map(name_mapping)
 
                 # Đếm số lượng bản ghi được ánh xạ
-                mapped_count = data_df["Mã hàng_mới"].notna().sum()
+                matched_count = data_df["Mã hàng_mới"].notna().sum()
                 logger.info(
-                    f"Số lượng bản ghi được ánh xạ: {mapped_count}/{len(data_df)}"
+                    f"Số lượng bản ghi được ánh xạ: {matched_count}/{len(data_df)}"
                 )
 
                 # Thay thế giá trị khi có ánh xạ
@@ -347,6 +353,12 @@ class ProductMappingProcessor:
             # Đặt lại vị trí buffer về đầu
             output_buffer.seek(0)
             logger.info("Đã hoàn thành xử lý và ghi vào buffer")
+
+            # Trả về thông tin về quá trình ánh xạ
+            return {
+                "matched_count": int(matched_count),
+                "total_count": total_count,
+            }
 
         except Exception as e:
             logger.error(f"Lỗi khi xử lý dữ liệu: {str(e)}", exc_info=True)
@@ -388,10 +400,16 @@ class ProductMappingProcessor:
             )
 
             # Áp dụng ánh xạ
+            matched_count = 0
+            total_count = len(data_df)
+
             if "Mã hàng" in data_df.columns:
                 # Tạo cột mới chứa giá trị đã ánh xạ
                 data_df["Mã hàng_mới"] = data_df["Mã hàng"].map(code_mapping)
                 data_df["Tên hàng_mới"] = data_df["Mã hàng"].map(name_mapping)
+
+                # Đếm số lượng bản ghi được ánh xạ
+                matched_count = data_df["Mã hàng_mới"].notna().sum()
 
                 # Thay thế giá trị khi có ánh xạ
                 data_df.loc[
@@ -414,7 +432,13 @@ class ProductMappingProcessor:
             data_df.to_excel(output_file, index=False)
 
             logger.info(f"File ánh xạ đã được lưu tại {output_file}")
-            return output_file
+
+            # Trả về thông tin về quá trình ánh xạ kèm theo đường dẫn file
+            return {
+                "output_file": output_file,
+                "matched_count": int(matched_count),
+                "total_count": total_count,
+            }
 
         except Exception as e:
             logger.error(f"Lỗi trong quá trình ánh xạ: {str(e)}", exc_info=True)
