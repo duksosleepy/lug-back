@@ -39,6 +39,11 @@ ERROR_NOTIFICATION_EMAILS = [
     "tan.nguyen@sangtam.com",
 ]
 
+# Email bổ sung cho process online
+ONLINE_ERROR_NOTIFICATION_EMAILS = ERROR_NOTIFICATION_EMAILS + [
+    "kiet.huynh@sangtam.com"
+]
+
 
 def validate_excel_file(filename: str) -> None:
     """Kiểm tra file có phải là file Excel không."""
@@ -68,6 +73,13 @@ async def send_error_file_email(
         from util.mail_client import EmailClient
         from util.send_email import load_config
 
+        # Chọn danh sách email nhận thông báo dựa trên loại process
+        recipients = (
+            ONLINE_ERROR_NOTIFICATION_EMAILS
+            if process_type == "online"
+            else ERROR_NOTIFICATION_EMAILS
+        )
+
         # Tạo tên file đính kèm
         error_filename = (
             f"{Path(original_filename).stem}_invalid_{process_type}.xlsx"
@@ -87,7 +99,7 @@ async def send_error_file_email(
             # Tạo client và gửi email
             with EmailClient(**config) as client:
                 msg = client.create_message(
-                    to=ERROR_NOTIFICATION_EMAILS,
+                    to=recipients,
                     subject=f"File số điện thoại không hợp lệ - {original_filename}",
                     body=f"""
                     <p>Dear,</p>
@@ -105,7 +117,7 @@ async def send_error_file_email(
                 result = client.send(msg)
 
                 if result:
-                    recipients_str = ", ".join(ERROR_NOTIFICATION_EMAILS)
+                    recipients_str = ", ".join(recipients)
                     logger.info(
                         f"Đã gửi file lỗi '{error_filename}' qua email thành công đến: {recipients_str}"
                     )
