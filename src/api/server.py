@@ -5,19 +5,22 @@ import os
 import tempfile
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-# Thiết lập logging
-logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
-
+# Configure logging
+logging.getLogger("uvicorn.error").setLevel(logging.ERROR)
+logging.getLogger("uvicorn.access").setLevel(logging.ERROR)
+logging.getLogger("uvicorn.asgi").setLevel(logging.ERROR)
+logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
 app = FastAPI()
 
 origins = [
     "http://localhost:3000",
     "http://localhost",
-    "http://45.117.77.126:3000",
 ]
 
 app.add_middleware(
@@ -312,4 +315,96 @@ async def process_mapping(
         logger.error(f"Lỗi khi ánh xạ mã hàng: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=400, detail=f"Lỗi khi ánh xạ mã hàng: {str(e)}"
+        )
+
+
+class WarrantyRequest(BaseModel):
+    name: str
+    phone: str
+    order_code: str
+    captchaToken: str
+
+
+@app.post("/warranty")
+async def submit_warranty(request: WarrantyRequest):
+    """
+    Process warranty registration form submissions.
+
+    1. Receives data from frontend form
+    2. Transforms the data to required format
+    3. Forwards data to external APIs
+    """
+    logger.info(f"Received warranty registration for {request.name}")
+
+    try:
+        # Format data for customer table
+        customer_data = {
+            "Họ tên": request.name,
+            "Số điện thoại 1": request.phone,
+            "Số điện thoại 2": "",
+            "Email": "",
+            "Nhóm khách hàng": "",
+            "Hạng thành viên": "",
+            "Điểm thưởng": "",
+            "Giới tính": "",
+            "Ngày sinh": "",
+            "Tỉnh thành": "",
+            "Quận huyện": "",
+            "Phường xã": "",
+            "Địa chỉ": "",
+            "Ghi chú": "",
+            "Còn hoạt động": "TRUE",
+        }
+
+        # Format data for order table
+        order_data = {"Họ tên": request.name, "Mã đơn hàng": request.order_code}
+
+        # Make API calls to external endpoints
+        # Get xc-token from environment variable
+        xc_token = os.environ.get("XC_TOKEN")
+        if not xc_token:
+            logger.warning(
+                "XC_TOKEN environment variable not set, using default value"
+            )
+            # xc_token = ""  # Fallback value, replace in production
+
+        # Define headers with the required xc-token
+        headers = {"xc-token": xc_token, "Content-Type": "application/json"}
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Submit customer data to first table
+            logger.info("Submitting customer data to external API")
+            customer_response = await client.post(
+                "http://45.117.77.126/api/v2/tables/morlizaxiw24e90/records",
+                json=customer_data,
+                headers=headers,
+            )
+            customer_response.raise_for_status()
+
+            # Submit order data to second table
+            logger.info("Submitting order data to external API")
+            order_response = await client.post(
+                "http://45.117.77.126/api/v2/tables/my1ifqacuacr537/records",
+                json=order_data,
+                headers=headers,
+            )
+            order_response.raise_for_status()
+
+            logger.info(
+                f"Successfully processed warranty registration for {request.name}"
+            )
+            return {"success": True, "message": "Đăng ký bảo hành thành công!"}
+
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            f"External API error: {e.response.status_code} - {e.response.text}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Không thể xử lý đăng ký bảo hành. Vui lòng thử lại sau.",
+        )
+    except Exception as e:
+        logger.error(f"Error processing warranty request: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail="Đã xảy ra lỗi khi xử lý đăng ký bảo hành."
         )
