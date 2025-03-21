@@ -381,6 +381,15 @@ async def submit_warranty(request: WarrantyRequest):
             )
             customer_response.raise_for_status()
 
+            # Submit customer data to first table extra
+            logger.info("Submitting extra customer data to external API")
+            customer_response = await client.post(
+                "http://45.117.77.126/api/v2/tables/mophpyo6xdr4v8y/records",
+                json=customer_data,
+                headers=headers,
+            )
+            customer_response.raise_for_status()
+
             # Submit order data to second table
             logger.info("Submitting order data to external API")
             order_response = await client.post(
