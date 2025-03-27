@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import io
 import logging
@@ -10,12 +11,15 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from sapo_sync import SapoSyncRequest, sync_mysapo, sync_mysapogo
+
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 # Configure logging
-logging.getLogger("uvicorn.error").setLevel(logging.ERROR)
-logging.getLogger("uvicorn.access").setLevel(logging.ERROR)
-logging.getLogger("uvicorn.asgi").setLevel(logging.ERROR)
-logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
+# logging.getLogger("uvicorn.error").setLevel(logging.ERROR)
+# logging.getLogger("uvicorn.access").setLevel(logging.ERROR)
+# logging.getLogger("uvicorn.asgi").setLevel(logging.ERROR)
+# logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
 app = FastAPI()
 
 origins = [
@@ -46,6 +50,53 @@ ERROR_NOTIFICATION_EMAILS = [
 ONLINE_ERROR_NOTIFICATION_EMAILS = ERROR_NOTIFICATION_EMAILS + [
     "kiet.huynh@sangtam.com"
 ]
+
+
+# Thêm endpoint này vào file src/api/server.py
+@app.post("/sapo/sync")
+async def sync_sapo(request_data: SapoSyncRequest):
+    """
+    Endpoint đồng bộ dữ liệu từ Sapo APIs vào Google Sheets
+
+    Args:
+        request_data (SapoSyncRequest): Chứa startDate và endDate với định dạng YYYY-MM-DD
+
+    Returns:
+        dict: Trạng thái của quá trình đồng bộ
+    """
+    try:
+        logger.info(
+            f"Bắt đầu đồng bộ Sapo từ {request_data.startDate} đến {request_data.endDate}"
+        )
+
+        # Gọi các hàm đồng bộ đồng thời
+        mysapo_task = sync_mysapo(request_data.startDate, request_data.endDate)
+        mysapogo_task = sync_mysapogo(
+            request_data.startDate, request_data.endDate
+        )
+
+        # Đợi cả hai task hoàn thành
+        mysapo_result, mysapogo_result = await asyncio.gather(
+            mysapo_task, mysapogo_task
+        )
+
+        total_orders_processed = mysapo_result.get(
+            "orders_processed", 0
+        ) + mysapogo_result.get("orders_processed", 0)
+
+        return {
+            "success": True,
+            "message": f"Đồng bộ Sapo hoàn tất. Tổng số đơn hàng đã xử lý: {total_orders_processed}",
+            "mysapo_net": mysapo_result,
+            "mysapogo_com": mysapogo_result,
+        }
+    except Exception as e:
+        logger.error(
+            f"Lỗi trong quá trình đồng bộ Sapo: {str(e)}", exc_info=True
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Lỗi khi xử lý đồng bộ Sapo: {str(e)}"
+        )
 
 
 def validate_excel_file(filename: str) -> None:
