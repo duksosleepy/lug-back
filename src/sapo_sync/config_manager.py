@@ -48,7 +48,7 @@ class SapoConfig:
             # Google Sheets
             spreadsheet_id=os.environ.get(
                 "SAPO_SPREADSHEET_ID",
-                "1h0Vrl5BgeSoN1tY2uQhHFV4Qv01yykFGXXDSeZJPm10",
+                "1WyN3PA4oWkjYGBGIC8nZy65102FkCD9jmnyWna6zFr8",
             ),
             landing_site_range=os.environ.get(
                 "SAPO_LANDING_SITE_RANGE", "Landing site!D2:AX"
