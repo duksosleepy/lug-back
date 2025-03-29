@@ -193,6 +193,7 @@ def process_page_data(
                     chi_nhanh = extracted_branch
                     break
 
+        # Phần này vẫn giữ lại để tính total_sales cho trường hợp không có line_items
         total_sales = 0
         customer_data = order.get("customer_data")
         if customer_data and isinstance(customer_data, dict):
@@ -229,7 +230,8 @@ def process_page_data(
                     ),
                     ("Mã sản phẩm", ""),
                     ("Tên sản phẩm", ""),
-                    ("Tổng tiền hàng", total_sales),
+                    # THAY ĐỔI: Sử dụng chuỗi rỗng "" thay vì total_sales
+                    ("Tổng tiền hàng", ""),
                     ("Ghi chú đơn", order.get("note", "")),
                     (
                         "Điện thoại KH",
@@ -274,7 +276,8 @@ def process_page_data(
                         ),
                         ("Mã sản phẩm", line_item.get("sku", "")),
                         ("Tên sản phẩm", line_item.get("product_name", "")),
-                        ("Tổng tiền hàng", total_sales),
+                        # THAY ĐỔI: Sử dụng line_amount
+                        ("Tổng tiền hàng", line_item.get("line_amount", "")),
                         ("Ghi chú đơn", order.get("note", "")),
                         (
                             "Điện thoại KH",
