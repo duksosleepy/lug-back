@@ -272,7 +272,7 @@ def process_page_data(
                             "Tên khách hàng",
                             (order.get("customer_data") or {}).get("name", ""),
                         ),
-                        ("Mã sản phẩm", line_item.get("product_id", "")),
+                        ("Mã sản phẩm", line_item.get("sku", "")),
                         ("Tên sản phẩm", line_item.get("product_name", "")),
                         ("Tổng tiền hàng", total_sales),
                         ("Ghi chú đơn", order.get("note", "")),
