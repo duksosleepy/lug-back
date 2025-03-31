@@ -46,8 +46,8 @@ def get_adjusted_dates(start_date: str, end_date: str, format="standard"):
     if format == "iso":
         # Giữ nguyên định dạng Z cho API request
         return (
-            f"{start_dt.strftime('%Y-%m-%d')}T24:00:00Z",
-            f"{end_dt.strftime('%Y-%m-%d')}T00:00:00Z",
+            f"{start_dt.strftime('%Y-%m-%d')}T00:00:00Z",
+            f"{end_dt.strftime('%Y-%m-%d')}T24:00:00Z",
         )
     else:
         return start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d")
