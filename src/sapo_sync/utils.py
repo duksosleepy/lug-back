@@ -8,6 +8,48 @@ from .credentials_manager import CredentialsManager
 logger = logging.getLogger(__name__)
 
 
+def convert_to_gmt7(iso_datetime_str):
+    """
+    Chuyển đổi chuỗi thời gian ISO từ GMT+0 sang GMT+7
+
+    Args:
+        iso_datetime_str (str): Chuỗi thời gian dạng ISO (ví dụ: "2025-03-01T12:00:00Z")
+
+    Returns:
+        str: Chuỗi thời gian đã được chuyển đổi sang GMT+7
+    """
+    if not iso_datetime_str:
+        return ""
+
+    try:
+        # Xử lý một số trường hợp đặc biệt
+        if (
+            "Z" not in iso_datetime_str
+            and "+" not in iso_datetime_str
+            and "-" not in iso_datetime_str[10:]
+        ):
+            if "T" in iso_datetime_str:
+                iso_datetime_str += (
+                    "Z"  # Giả sử GMT+0 nếu không có chỉ định múi giờ
+                )
+            else:
+                return iso_datetime_str  # Trả về nguyên gốc nếu không phải định dạng ISO
+
+        # Parse chuỗi thời gian
+        dt = datetime.fromisoformat(iso_datetime_str.replace("Z", "+00:00"))
+
+        # Thêm 7 giờ để chuyển từ GMT+0 sang GMT+7
+        dt = dt + timedelta(hours=7)
+
+        # Định dạng lại với múi giờ +07:00
+        return dt.strftime("%Y-%m-%dT%H:%M:%S+07:00")
+    except Exception as e:
+        logger.error(
+            f"Lỗi khi chuyển đổi thời gian {iso_datetime_str}: {str(e)}"
+        )
+        return iso_datetime_str  # Trả về chuỗi gốc nếu có lỗi
+
+
 def get_adjusted_dates(start_date: str, end_date: str, format="standard"):
     """
     Tính toán startDate - 1 ngày và endDate + 1 ngày
@@ -24,9 +66,11 @@ def get_adjusted_dates(start_date: str, end_date: str, format="standard"):
     end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
 
     if format == "iso":
+        # Thay đổi từ Z (GMT+0) sang +07:00 (GMT+7)
+        # Điều chỉnh giờ để tương đương với múi giờ GMT+7
         return (
-            f"{start_dt.strftime('%Y-%m-%d')}T17:00:00Z",
-            f"{end_dt.strftime('%Y-%m-%d')}T16:59:59Z",
+            f"{start_dt.strftime('%Y-%m-%d')}T00:00:00+07:00",
+            f"{end_dt.strftime('%Y-%m-%d')}T23:59:59+07:00",
         )
     else:
         return start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d")

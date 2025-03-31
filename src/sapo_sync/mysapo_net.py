@@ -6,6 +6,7 @@ import httpx
 
 from .config_manager import sapo_config
 from .utils import (
+    convert_to_gmt7,
     get_adjusted_dates,
     get_sheets_service,
     update_sheet_with_retry,
@@ -194,7 +195,10 @@ def extract_order_data(order, line_item):
                 if line_item
                 else 0,
             ),
-            ("Tạo lúc (Created at)", safe_get(order, "created_on")),
+            (
+                "Tạo lúc (Created at)",
+                convert_to_gmt7(safe_get(order, "created_on")),
+            ),
             (
                 "Số lượng sản phẩm (Lineitem quantity)",
                 safe_get(line_item, "quantity") if line_item else "",
@@ -247,7 +251,10 @@ def extract_order_data(order, line_item):
             ("Billing Phone", safe_get(billing_address, "phone")),
             ("Ghi chú (Notes)", safe_get(order, "note")),
             ("Chú thích (Note Attributes)", note_attributes),
-            ("Hủy đơn hàng lúc (Cancelled at)", cancelled_on or ""),
+            (
+                "Hủy đơn hàng lúc (Cancelled at)",
+                convert_to_gmt7(cancelled_on) if cancelled_on else "",
+            ),
             ("Phương thức thanh toán (Payment Method)", payment_method),
             (
                 "Tiền hoàn trả (Refunded Amount)",
