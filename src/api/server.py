@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import io
+import json
 import logging
 import os
 import tempfile
@@ -198,7 +199,7 @@ async def process_excel_file(
     Xử lý file Excel theo mode online/offline.
 
     - Với online mode: gọi processors.online_processor, hàm process_to_buffer trả về
-      tuple (valid_content, invalid_content, invalid_count).
+      tuple (valid_content, invalid_content, kl_records_json, invalid_count).
     - Với offline mode: gọi processors.offline_processor, hàm process_to_buffer ghi dữ liệu vào output_buffer.
 
     Trả về JSON với các trường:
@@ -225,15 +226,137 @@ async def process_excel_file(
         output_buffer = io.BytesIO()
 
         # Gọi hàm process_to_buffer
-        result = processor.process_to_buffer(output_buffer)
-        if result is not None:
-            # Online mode: process_to_buffer trả về tuple
-            valid_content, invalid_content, invalid_count = result
+        if is_online:
+            # Online mode: process_to_buffer trả về tuple (valid_content, invalid_content, kl_records_json, invalid_count)
+            valid_content, invalid_content, kl_records_json, invalid_count = (
+                processor.process_to_buffer(output_buffer)
+            )
+
+            # Gửi dữ liệu KL records tới API nếu có
+            if kl_records_json:
+                try:
+                    # Lấy xc-token từ biến môi trường
+                    xc_token = os.environ.get("XC_TOKEN")
+                    if not xc_token:
+                        logger.warning("XC_TOKEN environment variable not set")
+                        xc_token = ""  # Sử dụng token mặc định nếu không có
+
+                    # Parse JSON từ kl_records_json
+                    records_data = json.loads(kl_records_json)
+
+                    # Chuyển đổi định dạng dữ liệu theo yêu cầu
+                    transformed_records = []
+                    for record in records_data:
+                        # Chuyển đổi định dạng ngày từ dd/mm/yyyy sang yyyy-mm-dd
+                        date_str = record.get("Ngày Ct")
+                        try:
+                            if date_str:
+                                # Xử lý nhiều định dạng ngày có thể có
+                                if "/" in date_str:
+                                    day, month, year = date_str.split("/")
+                                    if len(year) == 2:
+                                        year = f"20{year}"  # Giả định năm 20xx
+                                    formatted_date = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+                                else:
+                                    # Giữ nguyên nếu đã đúng định dạng hoặc không xác định được
+                                    formatted_date = date_str
+                            else:
+                                formatted_date = ""
+                        except Exception:
+                            formatted_date = date_str or ""
+
+                        # Tạo record mới theo định dạng yêu cầu
+                        transformed_record = {
+                            "ngay_ct": formatted_date,
+                            "ma_ct": str(record.get("Mã Ct") or ""),
+                            "so_ct": str(record.get("Số Ct") or ""),
+                            "ma_bo_phan": str(record.get("Mã bộ phận") or ""),
+                            "ma_don_hang": str(record.get("Mã đơn hàng") or ""),
+                            "ten_khach_hang": str(
+                                record.get("Tên khách hàng") or ""
+                            ),
+                            "so_dien_thoai": str(
+                                record.get("Số điện thoại") or ""
+                            ).strip(),
+                            "tinh_thanh": str(record.get("Tỉnh thành") or ""),
+                            "quan_huyen": str(record.get("Quận huyện") or ""),
+                            "phuong_xa": str(record.get("Phường xã") or ""),
+                            "dia_chi": str(record.get("Địa chỉ") or ""),
+                            "ma_hang": str(record.get("Mã hàng") or ""),
+                            "ten_hang": str(record.get("Tên hàng") or ""),
+                            "imei": str(record.get("Imei") or ""),
+                            "so_luong": str(record.get("Số lượng") or ""),
+                            "doanh_thu": str(record.get("Doanh thu") or ""),
+                            "ghi_chu": str(record.get("Ghi chú") or ""),
+                        }
+                        transformed_records.append(transformed_record)
+
+                    # Debug: Hiển thị dữ liệu đã chuyển đổi
+                    logger.info(
+                        f"Đang gửi {len(transformed_records)} bản ghi KL đến API"
+                    )
+                    print("\n=== DEBUG: TRANSFORMED DATA FORMAT ===")
+                    if transformed_records:
+                        print(
+                            json.dumps(
+                                transformed_records[0],
+                                indent=2,
+                                ensure_ascii=False,
+                            )
+                        )
+                    print("======================================\n")
+
+                    # Gửi dữ liệu đến API
+                    async with httpx.AsyncClient(timeout=30.0) as client:
+                        response = await client.post(
+                            "http://10.100.0.1/api/v2/tables/mtvvlryi3xc0gqd/records",
+                            json=transformed_records,
+                            headers={
+                                "Content-Type": "application/json",
+                                "xc-token": xc_token,
+                            },
+                        )
+
+                        # Ghi log kết quả
+                        if response.status_code == 200:
+                            logger.info(
+                                f"Đã gửi dữ liệu KL records thành công: {response.status_code}"
+                            )
+                            print("\n=== DEBUG: API RESPONSE ===")
+                            print(f"Status code: {response.status_code}")
+                            print(
+                                f"Response: {response.text[:200]}..."
+                                if len(response.text) > 200
+                                else f"Response: {response.text}"
+                            )
+                            print("===========================\n")
+                        else:
+                            logger.warning(
+                                f"Không thể gửi dữ liệu KL records, mã lỗi: {response.status_code}"
+                            )
+                            print("\n=== DEBUG: API ERROR ===")
+                            print(f"Status code: {response.status_code}")
+                            print(
+                                f"Response: {response.text[:500]}..."
+                                if len(response.text) > 500
+                                else f"Response: {response.text}"
+                            )
+                            print("=======================\n")
+                except Exception as e:
+                    # Chỉ ghi log lỗi, không làm gián đoạn quá trình xử lý chính
+                    logger.error(
+                        f"Lỗi khi gửi dữ liệu KL records: {str(e)}",
+                        exc_info=True,
+                    )
         else:
             # Offline mode: dữ liệu được ghi vào output_buffer
-            valid_content = output_buffer.getvalue()
-            invalid_content = None
-            invalid_count = 0
+            result = processor.process_to_buffer(output_buffer)
+            if result is not None:
+                valid_content, invalid_content, invalid_count = result
+            else:
+                valid_content = output_buffer.getvalue()
+                invalid_content = None
+                invalid_count = 0
 
         # Gửi file lỗi qua email nếu có
         if invalid_content and invalid_count > 0:

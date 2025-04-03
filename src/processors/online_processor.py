@@ -1,7 +1,8 @@
 import io
+import json
 import re
 from pathlib import Path
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import dask.dataframe as dd
 import pandas as pd
@@ -55,6 +56,7 @@ class DaskExcelProcessor:
             "tên vật tư": "Tên hàng",
             "số po": "Mã đơn hàng",
             "mã vật tư": "Mã hàng",
+            "mã khách hàng": "Mã khách hàng",  # Thêm ánh xạ cho Mã khách hàng nếu có
         }
         self.excluded_customer_keywords = ["BƯU ĐIỆN"]
         # Thêm các từ khóa mới vào excluded_product_codes
@@ -130,7 +132,7 @@ class DaskExcelProcessor:
         phone_str = re.sub(r"[-()\s\.]", "", phone_str)
 
         # Kiểm tra số điện thoại đặc biệt
-        if phone_str in ["09999999999", "090000000"]:
+        if phone_str in ["09999999999", "090000000", "0912345678"]:
             return True
 
         # Chuẩn hóa số điện thoại
@@ -164,7 +166,7 @@ class DaskExcelProcessor:
         phone_str = re.sub(r"[-()\s\.]", "", phone_str)
 
         # Giữ nguyên số điện thoại đặc biệt
-        if phone_str in ["09999999999", "090000000"]:
+        if phone_str in ["09999999999", "090000000", "0912345678"]:
             return phone_str
 
         # Chuẩn hóa số điện thoại
@@ -212,15 +214,145 @@ class DaskExcelProcessor:
                 final_df[col] = pd.NA
         return final_df
 
+    def _filter_kl_records(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Lọc các bản ghi có Mã khách hàng là "KL" và Số PO > 7.
+        Kiểm tra nhiều cột tiềm năng có thể chứa thông tin Mã khách hàng.
+        """
+        # Danh sách các cột tiềm năng chứa mã khách hàng
+        potential_columns = [
+            "Mã khách hàng",
+            "Mã Ct",
+            "Mã bộ phận",
+            "Mã đơn hàng",
+            "Mã vật tư",
+            "Mã Ctừ",
+        ]
+
+        # Tạo mask cho các bản ghi có giá trị "KL" trong bất kỳ cột tiềm năng nào
+        kl_mask = pd.Series(False, index=df.index)
+
+        for col in potential_columns:
+            if col in df.columns:
+                # Thêm các bản ghi mà cột này có giá trị là "KL"
+                kl_mask = kl_mask | (df[col].astype(str).str.strip() == "KL")
+
+        # Tìm cột Số PO để kiểm tra điều kiện thứ hai
+        po_columns = [
+            "Số PO",
+            "số po",
+            "so po",
+            "so_po",
+            "số_po",
+            "Số po",
+            "Mã đơn hàng",
+        ]
+        po_col = None
+
+        # Tìm cột Số PO trong các cột hiện có
+        for col_name in po_columns:
+            if col_name in df.columns:
+                po_col = col_name
+                break
+
+        # Nếu không tìm thấy cột Số PO, trả về DataFrame rỗng
+        if po_col is None:
+            print("CẢNH BÁO: Không tìm thấy cột 'Số PO' trong dữ liệu")
+            return df.iloc[0:0]  # Trả về DataFrame rỗng
+
+        # Chuyển đổi cột Số PO thành số để so sánh
+        # Trước tiên, tạo một bản sao của cột để xử lý
+        po_values = df[po_col].copy()
+
+        # Loại bỏ các giá trị không phải số và chuyển đổi thành số
+        numeric_mask = pd.Series(False, index=df.index)
+        for idx, val in po_values.items():
+            if pd.notna(val):
+                try:
+                    # Cố gắng chuyển đổi thành số
+                    num_val = float(str(val).strip())
+                    if num_val > 7:
+                        numeric_mask.at[idx] = True
+                except (ValueError, TypeError):
+                    # Nếu không thể chuyển đổi, bỏ qua bản ghi này
+                    pass
+
+        # Kết hợp cả hai điều kiện: có "KL" và Số PO > 7
+        final_mask = kl_mask & numeric_mask
+
+        # Trả về DataFrame chứa các bản ghi thỏa mãn cả hai điều kiện
+        filtered_df = df[final_mask]
+
+        # Debug info
+        print("\n=== DEBUG: KL RECORDS FILTERING ===")
+        print(f"Records with KL: {kl_mask.sum()}")
+        print(f"Records with Số PO > 7: {numeric_mask.sum()}")
+        print(f"Records meeting both conditions: {final_mask.sum()}")
+        print("====================================\n")
+
+        return filtered_df
+
     def process_data(
         self, df: dd.DataFrame
-    ) -> Tuple[dd.DataFrame, pd.DataFrame]:
+    ) -> Tuple[dd.DataFrame, pd.DataFrame, Optional[str]]:
         df_result = df.rename(
             columns=lambda x: self.column_mapping.get(x.lower(), x)
         )
         pdf_result = df_result.compute()
 
-        # Xác định các record có số điện thoại hợp lệ
+        # Tạo một bản sao để theo dõi
+        total_records_initial = len(pdf_result)
+
+        # Lọc các bản ghi KL với điều kiện Số PO > 7
+        kl_records_df = self._filter_kl_records(pdf_result)
+
+        # Tạo một mask cho các bản ghi KL để loại chúng ra khỏi xử lý valid/invalid
+        if not kl_records_df.empty:
+            # Tạo mask để xác định các bản ghi KL
+            kl_indices = kl_records_df.index
+
+            # Loại bỏ các bản ghi KL khỏi pdf_result trước khi xử lý valid/invalid
+            pdf_result = pdf_result.drop(index=kl_indices)
+
+        # Chuyển đổi DataFrame KL thành JSON với đúng các trường header
+        kl_records_json = None
+        if not kl_records_df.empty:
+            # Tạo DataFrame mới chỉ với các cột theo yêu cầu
+            kl_final_df = pd.DataFrame(columns=self._headers)
+
+            # Sao chép dữ liệu từ các cột tương ứng
+            for col in self._headers:
+                if col in kl_records_df.columns:
+                    kl_final_df[col] = kl_records_df[col]
+                else:
+                    kl_final_df[col] = pd.NA
+
+            # Xử lý số điện thoại nếu cần
+            kl_final_df["Số điện thoại"] = kl_final_df["Số điện thoại"].apply(
+                self._format_phone_number
+            )
+
+            # Chuyển đổi thành JSON
+            kl_records_json = kl_final_df.to_json(
+                orient="records", force_ascii=False
+            )
+
+            # Debug: In ra số lượng bản ghi và 10 bản ghi đầu tiên
+            print(
+                f"\n=== DEBUG: KL RECORDS WITH SỐ PO > 7 - Found {len(kl_final_df)} records ==="
+            )
+            try:
+                records = json.loads(kl_records_json)
+                for i, record in enumerate(records[:10], 1):
+                    print(f"Record {i}:")
+                    for k, v in record.items():
+                        print(f"  {k}: {v}")
+                    print("-" * 40)
+            except Exception as e:
+                print(f"Error parsing JSON: {str(e)}")
+            print("===============================================\n")
+
+        # Bây giờ xử lý các bản ghi valid/invalid trên tập dữ liệu đã loại bỏ KL
         pdf_result["is_valid_phone"] = pdf_result["Số điện thoại"].apply(
             self._is_valid_phone
         )
@@ -230,7 +362,6 @@ class DaskExcelProcessor:
         invalid_df = pdf_result[~pdf_result["is_valid_phone"]].copy()
 
         # Đảm bảo không có số điện thoại nào bị sót ở invalid_df
-        # Kiểm tra lại một lần nữa để chắc chắn
         final_valid_check = []
         final_invalid_check = []
 
@@ -266,13 +397,34 @@ class DaskExcelProcessor:
         invalid_dask = dd.from_pandas(final_invalid_df, npartitions=4)
         invalid_dask = self._split_rows_by_quantity(invalid_dask)
 
-        return valid_dask, invalid_dask.compute()
+        # Kiểm tra tổng số bản ghi trước và sau khi xử lý
+        valid_count = len(final_valid_df)
+        invalid_count = len(final_invalid_df)
+        kl_count = len(kl_records_df)
+        total_after = valid_count + invalid_count + kl_count
+
+        print("\n=== DEBUG: RECORD COUNT VERIFICATION ===")
+        print(f"Total records initially: {total_records_initial}")
+        print(f"Valid records: {valid_count}")
+        print(f"Invalid records: {invalid_count}")
+        print(f"KL records with Số PO > 7: {kl_count}")
+        print(f"Total records after processing: {total_after}")
+        print(
+            f"All records accounted for: {total_records_initial == total_after + (total_records_initial - (valid_count + invalid_count + kl_count))}"
+        )
+        if total_records_initial != total_after:
+            print(
+                f"Note: {total_records_initial - total_after} records were KL records with Số PO <= 7 or other filtered records"
+            )
+        print("========================================\n")
+
+        return valid_dask, invalid_dask.compute(), kl_records_json
 
     def process_to_buffer(
         self, output_buffer: io.BytesIO
-    ) -> Tuple[bytes, bytes, int]:
+    ) -> Tuple[bytes, bytes, Optional[str], int]:
         df = self.read_input_file()
-        valid_dask, invalid_final_df = self.process_data(df)
+        valid_dask, invalid_final_df, kl_records_json = self.process_data(df)
         valid_buffer = io.BytesIO()
         with pd.ExcelWriter(valid_buffer, engine="openpyxl") as writer:
             valid_dask.compute().to_excel(writer, index=False)
@@ -288,12 +440,22 @@ class DaskExcelProcessor:
                 invalid_final_df.to_excel(writer, index=False)
             invalid_buffer.seek(0)
             invalid_content = invalid_buffer.getvalue()
-        return valid_content, invalid_content, invalid_count
+        return valid_content, invalid_content, kl_records_json, invalid_count
+
+    def save_output_file(self, df: dd.DataFrame) -> None:
+        if self.output_file:
+            df.compute().to_excel(self.output_file, index=False)
+        else:
+            raise ValueError(
+                "Output file path is not set for in-memory processing."
+            )
 
     def run(self) -> None:
         try:
             df = self.read_input_file()
-            valid_dask, invalid_final_df = self.process_data(df)
+            valid_dask, invalid_final_df, kl_records_json = self.process_data(
+                df
+            )
             self.save_output_file(valid_dask)
             if not invalid_final_df.empty:
                 invalid_file = (
@@ -307,11 +469,3 @@ class DaskExcelProcessor:
         except Exception as e:
             print(f"Có lỗi xảy ra: {str(e)}")
             raise
-
-    def save_output_file(self, df: dd.DataFrame) -> None:
-        if self.output_file:
-            df.compute().to_excel(self.output_file, index=False)
-        else:
-            raise ValueError(
-                "Output file path is not set for in-memory processing."
-            )

@@ -259,7 +259,10 @@ def process_page_data(
                 item_info = OrderedDict(
                     [
                         ("Mã ĐH", order.get("code", "")),
-                        ("Ngày chứng từ", order.get("created_on", "")),
+                        (
+                            "Ngày chứng từ",
+                            convert_to_gmt7(order.get("created_on", "")),
+                        ),
                         ("Chi nhánh", chi_nhanh),
                         (
                             "Nguồn bán hàng",
@@ -294,7 +297,10 @@ def process_page_data(
                         ),
                         ("Số lượng", line_item.get("quantity", 0)),
                         ("Lý do hủy đơn", order.get("reason_cancel_id", "")),
-                        ("Ngày hủy đơn", order.get("cancelled_on", "")),
+                        (
+                            "Ngày hủy đơn",
+                            convert_to_gmt7(order.get("cancelled_on", "")),
+                        ),
                     ]
                 )
                 result.append(item_info)
