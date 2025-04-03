@@ -8,9 +8,10 @@ import tempfile
 from pathlib import Path
 
 import httpx
+import pandas as pd
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from sapo_sync import SapoSyncRequest, sync_mysapo, sync_mysapogo
 
@@ -244,34 +245,66 @@ async def process_excel_file(
                     # Parse JSON từ kl_records_json
                     records_data = json.loads(kl_records_json)
 
+                    def format_document_number(value, field_type=None):
+                        """
+                        Định dạng số chứng từ, giữ nguyên các số 0 ở đầu hoặc thêm số 0 để đạt độ dài nhất định.
+
+                        Args:
+                            value: Giá trị cần định dạng
+                            field_type: Loại trường (ma_ct, so_ct, etc.) để xử lý đặc biệt
+                        """
+                        if pd.isna(value) or value is None:
+                            return ""
+
+                        # Xử lý thành chuỗi trước, loại bỏ dấu thập phân nếu cần
+                        if isinstance(value, float) and value.is_integer():
+                            value_str = str(int(value))
+                        else:
+                            value_str = str(value)
+
+                        # Xử lý đặc biệt cho so_ct: Thêm số 0 phía trước để đạt đủ 4 ký tự
+                        if field_type == "so_ct":
+                            return value_str.zfill(
+                                4
+                            )  # Thêm 0 phía trước để đạt đủ 4 ký tự
+
+                        # Các trường khác giữ nguyên
+                        return value_str
+
+                    # Hàm định dạng số lượng và doanh thu
+                    def format_numeric(value):
+                        """Định dạng các trường số, chuyển thành số nguyên nếu có thể."""
+                        if pd.isna(value) or value is None:
+                            return ""
+
+                        # Nếu là số thập phân với phần thập phân là 0
+                        if isinstance(value, float) and value.is_integer():
+                            return str(int(value))
+
+                        # Trường hợp còn lại
+                        return str(value)
+
                     # Chuyển đổi định dạng dữ liệu theo yêu cầu
                     transformed_records = []
                     for record in records_data:
                         # Chuyển đổi định dạng ngày từ dd/mm/yyyy sang yyyy-mm-dd
-                        date_str = record.get("Ngày Ct")
-                        try:
-                            if date_str:
-                                # Xử lý nhiều định dạng ngày có thể có
-                                if "/" in date_str:
-                                    day, month, year = date_str.split("/")
-                                    if len(year) == 2:
-                                        year = f"20{year}"  # Giả định năm 20xx
-                                    formatted_date = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
-                                else:
-                                    # Giữ nguyên nếu đã đúng định dạng hoặc không xác định được
-                                    formatted_date = date_str
-                            else:
-                                formatted_date = ""
-                        except Exception:
-                            formatted_date = date_str or ""
+                        formatted_date = record.get("Ngày Ct") or ""
 
                         # Tạo record mới theo định dạng yêu cầu
                         transformed_record = {
                             "ngay_ct": formatted_date,
-                            "ma_ct": str(record.get("Mã Ct") or ""),
-                            "so_ct": str(record.get("Số Ct") or ""),
-                            "ma_bo_phan": str(record.get("Mã bộ phận") or ""),
-                            "ma_don_hang": str(record.get("Mã đơn hàng") or ""),
+                            "ma_ct": format_document_number(
+                                record.get("Mã Ct")
+                            ),
+                            "so_ct": format_document_number(
+                                record.get("Số Ct"), "so_ct"
+                            ),
+                            "ma_bo_phan": format_document_number(
+                                record.get("Mã bộ phận")
+                            ),
+                            "ma_don_hang": format_document_number(
+                                record.get("Mã đơn hàng")
+                            ),
                             "ten_khach_hang": str(
                                 record.get("Tên khách hàng") or ""
                             ),
@@ -282,11 +315,15 @@ async def process_excel_file(
                             "quan_huyen": str(record.get("Quận huyện") or ""),
                             "phuong_xa": str(record.get("Phường xã") or ""),
                             "dia_chi": str(record.get("Địa chỉ") or ""),
-                            "ma_hang": str(record.get("Mã hàng") or ""),
+                            "ma_hang": format_document_number(
+                                record.get("Mã hàng")
+                            ),
                             "ten_hang": str(record.get("Tên hàng") or ""),
                             "imei": str(record.get("Imei") or ""),
-                            "so_luong": str(record.get("Số lượng") or ""),
-                            "doanh_thu": str(record.get("Doanh thu") or ""),
+                            "so_luong": format_numeric(record.get("Số lượng")),
+                            "doanh_thu": format_numeric(
+                                record.get("Doanh thu")
+                            ),
                             "ghi_chu": str(record.get("Ghi chú") or ""),
                         }
                         transformed_records.append(transformed_record)
@@ -309,7 +346,7 @@ async def process_excel_file(
                     # Gửi dữ liệu đến API
                     async with httpx.AsyncClient(timeout=30.0) as client:
                         response = await client.post(
-                            "http://10.100.0.1/api/v2/tables/mtvvlryi3xc0gqd/records",
+                            "http://10.100.0.1:8081/api/v2/tables/mtvvlryi3xc0gqd/records",
                             json=transformed_records,
                             headers={
                                 "Content-Type": "application/json",
@@ -496,6 +533,7 @@ class WarrantyRequest(BaseModel):
     name: str
     phone: str
     order_code: str
+    purchase_platform: str = Field(default="")
     captchaToken: str
 
 
@@ -504,90 +542,195 @@ async def submit_warranty(request: WarrantyRequest):
     """
     Process warranty registration form submissions.
 
-    1. Receives data from frontend form
-    2. Transforms the data to required format
-    3. Forwards data to external APIs
+    1. Tìm kiếm đơn hàng theo mã đơn hàng
+    2. Sao chép thông tin đơn hàng sang bảng khác
+    3. Xóa bản ghi gốc
+    4. Lưu thông tin người đăng ký vào bảng theo dõi
     """
-    logger.info(f"Received warranty registration for {request.name}")
+    logger.info(
+        f"Received warranty registration for {request.name} with order code {request.order_code}"
+    )
 
     try:
-        # Format data for customer table
-        customer_data = {
-            "Họ tên": request.name,
-            "Số điện thoại 1": request.phone,
-            "Số điện thoại 2": "",
-            "Email": "",
-            "Nhóm khách hàng": "",
-            "Hạng thành viên": "",
-            "Điểm thưởng": "",
-            "Giới tính": "",
-            "Ngày sinh": "",
-            "Tỉnh thành": "",
-            "Quận huyện": "",
-            "Phường xã": "",
-            "Địa chỉ": "",
-            "Ghi chú": "",
-            "Còn hoạt động": "TRUE",
+        # Lấy xc-token từ biến môi trường
+        xc_token = os.environ.get("XC_TOKEN", "")
+
+        # Format số điện thoại
+        formatted_phone = format_phone_number(request.phone)
+
+        # Gọi API để tìm thông tin đơn hàng dựa trên mã đơn hàng
+        order_code = request.order_code
+        search_url = f"http://10.100.0.1:8081/api/v2/tables/mtvvlryi3xc0gqd/records?where=(ma_don_hang%2Ceq%2C{order_code})&limit=1000&shuffle=0&offset=0"
+
+        headers = {
+            "accept": "application/json",
+            "content-type": "application/json",
+            "xc-token": xc_token,
         }
 
-        # Format data for order table
-        order_data = {"Họ tên": request.name, "Mã đơn hàng": request.order_code}
-
-        # Make API calls to external endpoints
-        # Get xc-token from environment variable
-        xc_token = os.environ.get("XC_TOKEN")
-        if not xc_token:
-            logger.warning(
-                "XC_TOKEN environment variable not set, using default value"
-            )
-            # xc_token = ""  # Fallback value, replace in production
-
-        # Define headers with the required xc-token
-        headers = {"xc-token": xc_token, "Content-Type": "application/json"}
-
         async with httpx.AsyncClient(timeout=30.0) as client:
-            # Submit customer data to first table
-            logger.info("Submitting customer data to external API")
-            customer_response = await client.post(
-                "http://45.117.77.126/api/v2/tables/morlizaxiw24e90/records",
-                json=customer_data,
-                headers=headers,
-            )
-            customer_response.raise_for_status()
+            # Bước 1: Tìm kiếm thông tin đơn hàng
+            logger.info(f"Searching for order with code: {order_code}")
+            search_response = await client.get(search_url, headers=headers)
 
-            # Submit customer data to first table extra
-            logger.info("Submitting extra customer data to external API")
-            customer_response = await client.post(
-                "http://45.117.77.126/api/v2/tables/mophpyo6xdr4v8y/records",
-                json=customer_data,
-                headers=headers,
-            )
-            customer_response.raise_for_status()
+            if search_response.status_code != 200:
+                logger.error(
+                    f"Error searching for order: {search_response.status_code} - {search_response.text}"
+                )
+                return {
+                    "success": False,
+                    "message": f"Lỗi khi tìm kiếm đơn hàng: {search_response.status_code}",
+                }
 
-            # Submit order data to second table
-            logger.info("Submitting order data to external API")
-            order_response = await client.post(
-                "http://45.117.77.126/api/v2/tables/my1ifqacuacr537/records",
-                json=order_data,
-                headers=headers,
-            )
-            order_response.raise_for_status()
+            search_data = search_response.json()
+            records = search_data.get("list", [])
+
+            # Nếu không tìm thấy đơn hàng, trả về thông báo rõ ràng cho frontend
+            if not records:
+                logger.warning(f"No records found for order code: {order_code}")
+                return {
+                    "success": False,
+                    "message": f"Không tìm thấy đơn hàng với mã {order_code}. Vui lòng kiểm tra lại mã đơn hàng.",
+                }
 
             logger.info(
-                f"Successfully processed warranty registration for {request.name}"
+                f"Found {len(records)} items for order code {order_code}"
             )
-            return {"success": True, "message": "Đăng ký bảo hành thành công!"}
+
+            # Bước 2: Chuẩn bị dữ liệu để sao chép sang bảng khác
+            # Cập nhật tên khách hàng và số điện thoại từ form đăng ký
+            records_to_copy = []
+            record_ids = []
+
+            for record in records:
+                # Lưu ID để xóa sau này
+                record_ids.append({"Id": record["Id"]})
+
+                # Tạo bản ghi mới với thông tin cập nhật từ form
+                new_record = {
+                    "ngay_ct": record["ngay_ct"],
+                    "ma_ct": record["ma_ct"],
+                    "so_ct": record["so_ct"],
+                    "ma_bo_phan": record["ma_bo_phan"],
+                    "ma_don_hang": record["ma_don_hang"],
+                    "ten_khach_hang": request.name,  # Cập nhật tên từ form
+                    "so_dien_thoai": formatted_phone,  # Cập nhật số điện thoại đã format
+                    "tinh_thanh": record["tinh_thanh"],
+                    "quan_huyen": record["quan_huyen"],
+                    "phuong_xa": record["phuong_xa"],
+                    "dia_chi": record["dia_chi"],
+                    "ma_hang": record["ma_hang"],
+                    "ten_hang": record["ten_hang"],
+                    "imei": record["imei"],
+                    "so_luong": record["so_luong"],
+                    "doanh_thu": record["doanh_thu"],
+                    "ghi_chu": f"Đăng ký bảo hành qua {request.purchase_platform or 'website'}",  # Thêm ghi chú
+                }
+                records_to_copy.append(new_record)
+
+            # Bước 3: Sao chép dữ liệu sang bảng đích
+            copy_url = (
+                "http://10.100.0.1:8081/api/v2/tables/mffwo1asni22n9z/records"
+            )
+
+            logger.info(
+                f"Copying {len(records_to_copy)} records to warranty table"
+            )
+            copy_response = await client.post(
+                copy_url, headers=headers, json=records_to_copy
+            )
+
+            if copy_response.status_code not in (200, 201):
+                logger.error(
+                    f"Error copying records: {copy_response.status_code} - {copy_response.text}"
+                )
+                return {
+                    "success": False,
+                    "message": "Lỗi khi lưu thông tin bảo hành",
+                }
+
+            # Bước 4: Xóa bản ghi gốc
+            delete_url = (
+                "http://10.100.0.1:8081/api/v2/tables/mtvvlryi3xc0gqd/records"
+            )
+
+            logger.info(f"Deleting {len(record_ids)} original records")
+            delete_response = await client.request(
+                method="DELETE",
+                url=delete_url,
+                headers=headers,
+                json=record_ids,
+            )
+
+            if delete_response.status_code != 200:
+                logger.warning(
+                    f"Error deleting original records: {delete_response.status_code} - {delete_response.text}"
+                )
+                # Không trả về lỗi ở đây, vì thông tin đã được sao chép thành công
+
+            # Bước 5: Lưu thông tin người đăng ký vào bảng theo dõi
+            registration_url = (
+                "http://10.100.0.1:8081/api/v2/tables/miyw4f4yeojamv6/records"
+            )
+
+            registration_data = {
+                "ho_ten": request.name,
+                "so_dien_thoai": formatted_phone,
+                "noi_mua": request.purchase_platform or "website",
+                "ma_don_hang": request.order_code,
+            }
+
+            logger.info(f"Saving registration info: {registration_data}")
+            registration_response = await client.post(
+                registration_url, headers=headers, json=registration_data
+            )
+
+            if registration_response.status_code not in (200, 201):
+                logger.warning(
+                    f"Error saving registration info: {registration_response.status_code} - {registration_response.text}"
+                )
+                # Không trả về lỗi ở đây, vì các bước chính đã hoàn thành
+
+            return {
+                "success": True,
+                "message": "Đăng ký bảo hành thành công!",
+                "items_processed": len(records_to_copy),
+            }
 
     except httpx.HTTPStatusError as e:
         logger.error(
             f"External API error: {e.response.status_code} - {e.response.text}"
         )
-        raise HTTPException(
-            status_code=500,
-            detail="Không thể xử lý đăng ký bảo hành. Vui lòng thử lại sau.",
-        )
+        return {
+            "success": False,
+            "message": "Không thể xử lý đăng ký bảo hành. Vui lòng thử lại sau.",
+        }
     except Exception as e:
-        logger.error(f"Error processing warranty request: {str(e)}")
-        raise HTTPException(
-            status_code=500, detail="Đã xảy ra lỗi khi xử lý đăng ký bảo hành."
+        logger.error(
+            f"Error processing warranty request: {str(e)}", exc_info=True
         )
+        return {
+            "success": False,
+            "message": "Đã xảy ra lỗi khi xử lý đăng ký bảo hành.",
+        }
+
+
+def format_phone_number(phone: str) -> str:
+    """
+    Chuyển đổi số điện thoại từ định dạng quốc tế (+84...) sang định dạng Việt Nam (0...)
+    """
+    if not phone:
+        return ""
+
+    # Loại bỏ khoảng trắng và các ký tự không cần thiết
+    phone = phone.strip()
+
+    # Nếu số điện thoại bắt đầu bằng +84, thay bằng 0
+    if phone.startswith("+84"):
+        return "0" + phone[3:]
+
+    # Nếu số điện thoại bắt đầu bằng 84 (không có dấu +), thay bằng 0
+    if phone.startswith("84") and not phone.startswith("0"):
+        return "0" + phone[2:]
+
+    return phone
