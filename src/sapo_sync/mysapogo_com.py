@@ -21,39 +21,71 @@ RANGE_NAME = sapo_config.data_range
 
 
 def create_lookup_tables():
-    """Create efficient lookup tables from the static data files."""
-    order_sources_lookup = {}
-    accounts_lookup = {}
+    """Create efficient lookup tables from inline static data instead of files."""
+    # Inline order sources data instead of loading from file
+    order_sources_lookup = {
+        8700401: "Recall",
+        8700400: "Đổi hàng Online",
+        8700399: "Đổi hàng Tiki",
+        8700398: "Đổi hàng LZD",
+        8700397: "Đổi hàng Shopee",
+        8700396: "Bảo Hành",
+        8650849: "Lug ID",
+        8153380: "App",
+        8088564: "Live Stream",
+        7797684: "Hotline",
+        6490836: "TiktokShop",
+        4922568: "GrabMart",
+        4563501: "WebOrder",
+        4390031: "Instagram",
+        2064035: "Sendo",
+        850822: "Khác",
+        850821: "Shopee",
+        850820: "Pos",
+        850819: "Tiki",
+        850818: "Lazada",
+        850817: "Zalo",
+        850816: "Facebook",
+        850815: "Web",
+    }
 
-    try:
-        # Load order sources data
-        with open("order_source.json", "r", encoding="utf-8") as file:
-            order_sources_data = json.load(file)
-
-        # Create lookup for order sources
-        if "order_sources" in order_sources_data:
-            order_sources_lookup = {
-                source["id"]: source["name"]
-                for source in order_sources_data["order_sources"]
-                if "id" in source and "name" in source
-            }
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        logger.error(f"Error loading order sources: {e}")
-
-    try:
-        # Load accounts data
-        with open("account.json", "r", encoding="utf-8") as file:
-            accounts_data = json.load(file)
-
-        # Create lookup for accounts
-        if "accounts" in accounts_data:
-            accounts_lookup = {
-                account["id"]: account["full_name"]
-                for account in accounts_data["accounts"]
-                if "id" in account and "full_name" in account
-            }
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        logger.error(f"Error loading accounts: {e}")
+    # Inline accounts data instead of loading from file
+    accounts_lookup = {
+        1227257: "Khôi IT LUG",
+        1226958: "Dương Duyên",
+        1226404: "Phương Nhi",
+        1222086: "null Nguyễn Anh",
+        1214227: "Trường Chinh",
+        1213641: "Duyên",
+        1212709: "Trúc Tuyền",
+        1209686: "Ngọc Yến",
+        1208310: "null Hương",
+        1199950: "Phúc Kho",
+        1194871: "Thúy Hoa",
+        1184440: "Đăng Kho",
+        1182031: "Sơn tiktok",
+        1181637: "Dũng",
+        1179953: "Kế Toán",
+        1179761: "Kiệt",
+        1179364: "Chuyên",
+        1179204: "Nguyễn Phương",
+        1171594: "Trinh",
+        1080747: "CHT KVC",
+        1071288: "Chị Lam",
+        1056112: "Trúc Tuyền",
+        1035703: "Kim Liễu",
+        1030008: "Khánh_KVC",
+        1027483: "Lê Dũng",
+        1026890: "Hoài Trinh",
+        1025361: "Nam KVC",
+        1010245: "Thảo Như",
+        914229: "Ngọc Bích",
+        910896: "Ánh Tuyết",
+        797625: "Thảo",
+        429880: "Nhựt Đăng",
+        394673: "Hoàng Long (Call)",
+        146761: "LUG",
+    }
 
     return order_sources_lookup, accounts_lookup
 
