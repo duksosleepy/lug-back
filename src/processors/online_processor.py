@@ -216,78 +216,22 @@ class DaskExcelProcessor:
 
     def _filter_kl_records(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Lọc các bản ghi có Mã khách hàng là "KL" và Số PO > 7.
-        Kiểm tra nhiều cột tiềm năng có thể chứa thông tin Mã khách hàng.
+        Lọc các bản ghi có số điện thoại là "0912345678".
         """
-        # Danh sách các cột tiềm năng chứa mã khách hàng
-        potential_columns = [
-            "Mã khách hàng",
-            "Mã Ct",
-            "Mã bộ phận",
-            "Mã đơn hàng",
-            "Mã vật tư",
-            "Mã Ctừ",
-        ]
-
-        # Tạo mask cho các bản ghi có giá trị "KL" trong bất kỳ cột tiềm năng nào
-        kl_mask = pd.Series(False, index=df.index)
-
-        for col in potential_columns:
-            if col in df.columns:
-                # Thêm các bản ghi mà cột này có giá trị là "KL"
-                kl_mask = kl_mask | (df[col].astype(str).str.strip() == "KL")
-
-        # Tìm cột Số PO để kiểm tra điều kiện thứ hai
-        po_columns = [
-            "Số PO",
-            "số po",
-            "so po",
-            "so_po",
-            "số_po",
-            "Số po",
-            "Mã đơn hàng",
-        ]
-        po_col = None
-
-        # Tìm cột Số PO trong các cột hiện có
-        for col_name in po_columns:
-            if col_name in df.columns:
-                po_col = col_name
-                break
-
-        # Nếu không tìm thấy cột Số PO, trả về DataFrame rỗng
-        if po_col is None:
-            print("CẢNH BÁO: Không tìm thấy cột 'Số PO' trong dữ liệu")
+        # Kiểm tra xem cột "Số điện thoại" có tồn tại không
+        if "Số điện thoại" not in df.columns:
+            print("CẢNH BÁO: Không tìm thấy cột 'Số điện thoại' trong dữ liệu")
             return df.iloc[0:0]  # Trả về DataFrame rỗng
 
-        # Chuyển đổi cột Số PO thành số để so sánh
-        # Trước tiên, tạo một bản sao của cột để xử lý
-        po_values = df[po_col].copy()
+        # Tạo mask cho các bản ghi có số điện thoại "0912345678"
+        phone_mask = df["Số điện thoại"].astype(str).str.strip() == "0912345678"
 
-        # Loại bỏ các giá trị không phải số và chuyển đổi thành số
-        numeric_mask = pd.Series(False, index=df.index)
-        for idx, val in po_values.items():
-            if pd.notna(val):
-                try:
-                    # Cố gắng chuyển đổi thành số
-                    num_val = float(str(val).strip())
-                    if num_val > 7:
-                        numeric_mask.at[idx] = True
-                except (ValueError, TypeError):
-                    # Nếu không thể chuyển đổi, bỏ qua bản ghi này
-                    pass
-
-        # Kết hợp cả hai điều kiện: có "KL" và Số PO > 7
-        final_mask = kl_mask & numeric_mask
-
-        # Trả về DataFrame chứa các bản ghi thỏa mãn cả hai điều kiện
-        filtered_df = df[final_mask]
+        # Trả về DataFrame chứa các bản ghi thỏa mãn điều kiện
+        filtered_df = df[phone_mask]
 
         # Debug info
         print("\n=== DEBUG: KL RECORDS FILTERING ===")
-        print(f"Records with KL: {kl_mask.sum()}")
-        print(f"Records with Số PO > 7: {numeric_mask.sum()}")
-        print(f"Records meeting both conditions: {final_mask.sum()}")
+        print(f"Records with phone number 0912345678: {phone_mask.sum()}")
         print("====================================\n")
 
         return filtered_df
