@@ -585,12 +585,67 @@ async def submit_warranty(request: WarrantyRequest):
             search_data = search_response.json()
             records = search_data.get("list", [])
 
-            # Nếu không tìm thấy đơn hàng, trả về thông báo rõ ràng cho frontend
+            # Nếu không tìm thấy đơn hàng, lưu thông tin vào bảng mydoap8edbr206g
             if not records:
                 logger.warning(f"No records found for order code: {order_code}")
+
+                # THAY ĐỔI: Thay vì trả về lỗi, lưu thông tin vào bảng mydoap8edbr206g
+                registration_data_new_table = {
+                    "ho_ten": request.name,
+                    "so_dien_thoai": formatted_phone,
+                    "noi_mua": request.purchase_platform or "website",
+                    "ma_don_hang": request.order_code,
+                    "ghi_chu": "Đăng ký không có mã đơn hàng trong hệ thống",
+                }
+
+                # Lưu vào bảng mới
+                new_table_url = "http://10.100.0.1:8081/api/v2/tables/mydoap8edbr206g/records"
+
+                try:
+                    new_table_response = await client.post(
+                        new_table_url,
+                        headers=headers,
+                        json=registration_data_new_table,
+                    )
+
+                    if new_table_response.status_code not in (200, 201):
+                        logger.warning(
+                            f"Error saving to new table: {new_table_response.status_code} - {new_table_response.text}"
+                        )
+                except Exception as e:
+                    logger.error(f"Error posting to new table: {str(e)}")
+
+                # Lưu thông tin vào bảng theo dõi
+                registration_url = "http://10.100.0.1:8081/api/v2/tables/miyw4f4yeojamv6/records"
+
+                registration_data = {
+                    "ho_ten": request.name,
+                    "so_dien_thoai": formatted_phone,
+                    "noi_mua": request.purchase_platform or "website",
+                    "ma_don_hang": request.order_code,
+                }
+
+                try:
+                    registration_response = await client.post(
+                        registration_url,
+                        headers=headers,
+                        json=registration_data,
+                    )
+
+                    if registration_response.status_code not in (200, 201):
+                        logger.warning(
+                            f"Error saving registration info: {registration_response.status_code} - {registration_response.text}"
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"Error posting to registration table: {str(e)}"
+                    )
+
+                # Trả về thành công thay vì lỗi
                 return {
-                    "success": False,
-                    "message": f"Không tìm thấy đơn hàng với mã {order_code}. Vui lòng kiểm tra lại mã đơn hàng.",
+                    "success": True,
+                    "message": "Đăng ký bảo hành thành công!",
+                    "order_found": False,
                 }
 
             logger.info(
@@ -695,6 +750,7 @@ async def submit_warranty(request: WarrantyRequest):
                 "success": True,
                 "message": "Đăng ký bảo hành thành công!",
                 "items_processed": len(records_to_copy),
+                "order_found": True,
             }
 
     except httpx.HTTPStatusError as e:
