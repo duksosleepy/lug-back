@@ -289,6 +289,18 @@ async def process_excel_file(
                     for record in records_data:
                         # Chuyển đổi định dạng ngày từ dd/mm/yyyy sang yyyy-mm-dd
                         formatted_date = record.get("Ngày Ct") or ""
+                        if formatted_date and "/" in formatted_date:
+                            try:
+                                # Parse the date assuming dd/mm/yyyy format
+                                date_parts = formatted_date.split("/")
+                                if len(date_parts) == 3:
+                                    day, month, year = date_parts
+                                    # Reformat to yyyy-mm-dd
+                                    formatted_date = f"{year}-{month}-{day}"
+                            except Exception as e:
+                                logger.error(
+                                    f"Error formatting date {formatted_date}: {str(e)}"
+                                )
 
                         # Tạo record mới theo định dạng yêu cầu
                         transformed_record = {
@@ -373,11 +385,7 @@ async def process_excel_file(
                             )
                             print("\n=== DEBUG: API ERROR ===")
                             print(f"Status code: {response.status_code}")
-                            print(
-                                f"Response: {response.text[:500]}..."
-                                if len(response.text) > 500
-                                else f"Response: {response.text}"
-                            )
+                            print(f"Response: {response.text}")
                             print("=======================\n")
                 except Exception as e:
                     # Chỉ ghi log lỗi, không làm gián đoạn quá trình xử lý chính
@@ -398,7 +406,6 @@ async def process_excel_file(
         # Gửi file lỗi qua email nếu có
         if invalid_content and invalid_count > 0:
             await send_error_file_email(invalid_content, filename, process_type)
-
         # Mã hóa nội dung file sang base64
         valid_file_b64 = (
             base64.b64encode(valid_content).decode("utf-8")
