@@ -15,6 +15,9 @@ from .google_utils import (
 
 # HTTP
 from .http_utils import get_json_data, post_json_data
+
+# Logging
+from .logging import setup_logging
 from .mail_client import EmailClient
 
 # Phone
@@ -73,4 +76,6 @@ __all__ = [
     "get_json_data",
     # Sentry
     "init_sentry",
+    # Logging
+    "setup_logging",
 ]

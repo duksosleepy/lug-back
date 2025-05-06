@@ -2,15 +2,11 @@
 Utility for Sentry error tracking integration.
 """
 
-import logging
-
 import sentry_sdk
+from loguru import logger
 from sentry_sdk.integrations.fastapi import FastApiIntegration
-from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 
 from settings import sentry_settings
-
-logger = logging.getLogger(__name__)
 
 
 def init():
@@ -36,7 +32,6 @@ def init():
             send_default_pii=True,
             integrations=[
                 FastApiIntegration(),
-                SqlalchemyIntegration(),
             ],
             traces_sample_rate=sentry_settings.traces_sample_rate,
         )

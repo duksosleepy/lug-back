@@ -2,7 +2,6 @@ import asyncio
 import base64
 import io
 import json
-import logging
 import os
 import tempfile
 from pathlib import Path
@@ -11,20 +10,27 @@ import httpx
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from sapo_sync import SapoSyncRequest, sync_mysapo, sync_mysapogo
 from settings import app_settings
 from util import format_phone_number, validate_excel_file
+from util.logging import setup_logging
+from util.logging.middleware import setup_fastapi_logging
 
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
-# Configure logging
-# logging.getLogger("uvicorn.error").setLevel(logging.ERROR)
-# logging.getLogger("uvicorn.access").setLevel(logging.ERROR)
-# logging.getLogger("uvicorn.asgi").setLevel(logging.ERROR)
-# logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
-app = FastAPI()
+# Initialize Loguru for this module
+setup_logging(log_to_file=False)
+
+# Create FastAPI application with custom title and description
+app = FastAPI(
+    title="LUG Backend API",
+    description="API for processing files and handling warranty registrations",
+    version="0.1.0",
+)
+
+# Configure FastAPI with Loguru logging middleware
+setup_fastapi_logging(app)
 
 origins = app_settings.cors_origins
 
