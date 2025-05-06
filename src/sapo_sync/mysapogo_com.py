@@ -21,7 +21,7 @@ RANGE_NAME = sapo_config.data_range
 
 
 def create_lookup_tables():
-    """Create efficient lookup tables from inline static data instead of files."""
+    "Create efficient lookup tables from inline static data instead of files."
     # Inline order sources data instead of loading from file
     order_sources_lookup = {
         8700401: "Recall",
