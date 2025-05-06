@@ -1,37 +1,45 @@
-import os
+"""
+Utility for Sentry error tracking integration.
+"""
+
+import logging
 
 import sentry_sdk
-from sentry_sdk.integrations.flask import FlaskIntegration
-from sentry_sdk.integrations.redis import RedisIntegration
-from sentry_sdk.integrations.rq import RqIntegration
+from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 
-TRACES_SAMPLE_RATE = float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0.0"))
+from settings import sentry_settings
 
-NON_REPORTED_EXCEPTIONS = ["QueryExecutionError"]
-
-
-def before_send(event, hint):
-    if "exc_info" in hint:
-        exc_type, exc_value, tb = hint["exc_info"]
-        if any([(e in str(type(exc_value))) for e in NON_REPORTED_EXCEPTIONS]):
-            return None
-
-    return event
+logger = logging.getLogger(__name__)
 
 
 def init():
-    sentry_sdk.init(
-        dsn=settings.SENTRY_DSN,
-        environment=settings.SENTRY_ENVIRONMENT,
-        release=__version__,
-        before_send=before_send,
-        send_default_pii=True,
-        integrations=[
-            FlaskIntegration(),
-            SqlalchemyIntegration(),
-            RedisIntegration(),
-            RqIntegration(),
-        ],
-        traces_sample_rate=TRACES_SAMPLE_RATE,
-    )
+    """
+    Initialize Sentry for error tracking.
+    Uses configuration from sentry_settings.
+    """
+    if not sentry_settings.is_configured():
+        logger.info("Sentry integration is disabled or not configured.")
+        return
+
+    try:
+        logger.info(
+            f"Initializing Sentry with environment: {sentry_settings.environment}, "
+            f"release: {sentry_settings.release}"
+        )
+
+        sentry_sdk.init(
+            dsn=sentry_settings.dsn,
+            environment=sentry_settings.environment,
+            release=sentry_settings.release,
+            before_send=sentry_settings.get_before_send(),  # Get function from settings
+            send_default_pii=True,
+            integrations=[
+                FastApiIntegration(),
+                SqlalchemyIntegration(),
+            ],
+            traces_sample_rate=sentry_settings.traces_sample_rate,
+        )
+        logger.info("Sentry initialization complete")
+    except Exception as e:
+        logger.error(f"Failed to initialize Sentry: {str(e)}")

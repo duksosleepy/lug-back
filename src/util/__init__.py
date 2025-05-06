@@ -18,7 +18,7 @@ from .http_utils import get_json_data, post_json_data
 from .mail_client import EmailClient
 
 # Phone
-from .phone_utils import format_phone_number
+from .phone_utils import format_phone_number, is_valid_phone
 from .send_email import load_config, send_notification_email
 
 # Sentry
@@ -64,6 +64,7 @@ __all__ = [
     "convert_to_gmt7",
     "get_adjusted_dates",
     # Phone
+    "is_valid_phone",
     "format_phone_number",
     # Excel
     "validate_excel_file",

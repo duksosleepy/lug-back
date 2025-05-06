@@ -1,12 +1,12 @@
 import io
 import json
-import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import dask.dataframe as dd
 import pandas as pd
-import phonenumbers  # Thêm thư viện phonenumbers
+
+from util.phone_utils import format_phone_number, is_valid_phone
 
 
 class DaskExcelProcessor:
@@ -118,82 +118,13 @@ class DaskExcelProcessor:
                     new_rows.append(new_row)
         return dd.from_pandas(pd.DataFrame(new_rows), npartitions=4)
 
-    @staticmethod
-    def _is_valid_phone(phone: str) -> bool:
-        """
-        Kiểm tra số điện thoại có hợp lệ không sử dụng thư viện phonenumbers
-        Chỉ chấp nhận số điện thoại Việt Nam 10 số (bắt đầu bằng số 0)
-        """
-        if pd.isna(phone):
-            return False
-
-        # Loại bỏ các ký tự không phải số
-        phone_str = str(phone).strip()
-        phone_str = re.sub(r"[-()\s\.]", "", phone_str)
-
-        # Kiểm tra số điện thoại đặc biệt
-        if phone_str in ["09999999999", "090000000", "0912345678"]:
-            return True
-
-        # Chuẩn hóa số điện thoại
-        if phone_str.startswith("+84"):
-            phone_str = "0" + phone_str[3:]
-        elif phone_str.startswith("84") and not phone_str.startswith("0"):
-            phone_str = "0" + phone_str[2:]
-
-        # Kiểm tra độ dài phải đúng 10 số và bắt đầu bằng số 0
-        if len(phone_str) != 10 or not phone_str.startswith("0"):
-            return False
-
-        try:
-            # Parse số điện thoại với mã quốc gia Việt Nam (VN)
-            parsed_number = phonenumbers.parse(phone_str, "VN")
-            # Kiểm tra có phải số điện thoại hợp lệ không
-            return phonenumbers.is_valid_number(parsed_number)
-        except Exception:
-            return False
-
-    @staticmethod
-    def _format_phone_number(phone: str) -> str:
-        """
-        Format số điện thoại thành định dạng chuẩn 10 số của Việt Nam
-        """
-        if pd.isna(phone):
-            return None
-
-        # Loại bỏ các ký tự không phải số
-        phone_str = str(phone).strip()
-        phone_str = re.sub(r"[-()\s\.]", "", phone_str)
-
-        # Giữ nguyên số điện thoại đặc biệt
-        if phone_str in ["09999999999", "090000000", "0912345678"]:
-            return phone_str
-
-        # Chuẩn hóa số điện thoại
-        if phone_str.startswith("+84"):
-            phone_str = "0" + phone_str[3:]
-        elif phone_str.startswith("84") and not phone_str.startswith("0"):
-            phone_str = "0" + phone_str[2:]
-
-        # Kiểm tra độ dài và tính hợp lệ
-        try:
-            parsed_number = phonenumbers.parse(phone_str, "VN")
-            if (
-                phonenumbers.is_valid_number(parsed_number)
-                and len(phone_str) == 10
-            ):
-                return phone_str
-            return None
-        except Exception:
-            return None
-
     def _process_final(
         self, df: pd.DataFrame, format_phone: bool = True
     ) -> pd.DataFrame:
         df_processed = df.copy()
         if format_phone:
             df_processed["Số điện thoại"] = df_processed["Số điện thoại"].apply(
-                self._format_phone_number
+                format_phone_number
             )
 
         # Đã loại bỏ việc ghi đè cột "Mã đơn hàng" từ công thức
@@ -273,7 +204,7 @@ class DaskExcelProcessor:
 
             # Xử lý số điện thoại nếu cần
             kl_final_df["Số điện thoại"] = kl_final_df["Số điện thoại"].apply(
-                self._format_phone_number
+                format_phone_number
             )
 
             # Chuyển đổi thành JSON
@@ -298,7 +229,7 @@ class DaskExcelProcessor:
 
         # Bây giờ xử lý các bản ghi valid/invalid trên tập dữ liệu đã loại bỏ KL
         pdf_result["is_valid_phone"] = pdf_result["Số điện thoại"].apply(
-            self._is_valid_phone
+            is_valid_phone
         )
 
         # Tách thành hai DataFrame: valid và invalid
@@ -310,7 +241,7 @@ class DaskExcelProcessor:
         final_invalid_check = []
 
         for _, row in valid_df.iterrows():
-            if self._is_valid_phone(row["Số điện thoại"]):
+            if is_valid_phone(row["Số điện thoại"]):
                 final_valid_check.append(row)
             else:
                 final_invalid_check.append(row)

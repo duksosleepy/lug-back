@@ -1,12 +1,12 @@
 import io
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 import dask.dataframe as dd
 import pandas as pd
-import phonenumbers  # Thêm thư viện phonenumbers
+
+from util.phone_utils import format_phone_number, is_valid_phone
 
 
 @dataclass
@@ -147,75 +147,6 @@ class DaskExcelProcessor:
         return dd.from_pandas(filtered_df, npartitions=4)
 
     @staticmethod
-    def _is_valid_phone(phone: str) -> bool:
-        """
-        Kiểm tra số điện thoại có hợp lệ không sử dụng thư viện phonenumbers
-        Chỉ chấp nhận số điện thoại Việt Nam 10 số (bắt đầu bằng số 0)
-        """
-        if pd.isna(phone):
-            return False
-
-        # Loại bỏ các ký tự không phải số
-        phone_str = str(phone).strip()
-        phone_str = re.sub(r"[-()\s\.]", "", phone_str)
-
-        # Kiểm tra số điện thoại đặc biệt
-        if phone_str in ["09999999999", "090000000"]:
-            return True
-
-        # Chuẩn hóa số điện thoại
-        if phone_str.startswith("+84"):
-            phone_str = "0" + phone_str[3:]
-        elif phone_str.startswith("84") and not phone_str.startswith("0"):
-            phone_str = "0" + phone_str[2:]
-
-        # Kiểm tra độ dài phải đúng 10 số và bắt đầu bằng số 0
-        if len(phone_str) != 10 or not phone_str.startswith("0"):
-            return False
-
-        try:
-            # Parse số điện thoại với mã quốc gia Việt Nam (VN)
-            parsed_number = phonenumbers.parse(phone_str, "VN")
-            # Kiểm tra có phải số điện thoại hợp lệ không
-            return phonenumbers.is_valid_number(parsed_number)
-        except Exception:
-            return False
-
-    @staticmethod
-    def _format_phone_number(phone: str) -> str:
-        """
-        Format số điện thoại thành định dạng chuẩn 10 số của Việt Nam
-        """
-        if pd.isna(phone):
-            return None
-
-        # Loại bỏ các ký tự không phải số
-        phone_str = str(phone).strip()
-        phone_str = re.sub(r"[-()\s\.]", "", phone_str)
-
-        # Giữ nguyên số điện thoại đặc biệt
-        if phone_str in ["09999999999", "090000000"]:
-            return phone_str
-
-        # Chuẩn hóa số điện thoại
-        if phone_str.startswith("+84"):
-            phone_str = "0" + phone_str[3:]
-        elif phone_str.startswith("84") and not phone_str.startswith("0"):
-            phone_str = "0" + phone_str[2:]
-
-        # Kiểm tra độ dài và tính hợp lệ
-        try:
-            parsed_number = phonenumbers.parse(phone_str, "VN")
-            if (
-                phonenumbers.is_valid_number(parsed_number)
-                and len(phone_str) == 10
-            ):
-                return phone_str
-            return None
-        except Exception:
-            return None
-
-    @staticmethod
     def split_rows_by_quantity(df: dd.DataFrame) -> dd.DataFrame:
         pdf = df.compute()
         if pdf.empty:
@@ -261,7 +192,7 @@ class DaskExcelProcessor:
         df_processed = df.copy()
         if format_phone:
             df_processed["Số điện thoại"] = df_processed["Số điện thoại"].apply(
-                self._format_phone_number
+                format_phone_number
             )
         # Tạo mã đơn hàng và cập nhật các trường cần thiết
         df_processed["Mã đơn hàng"] = df_processed.apply(
@@ -285,7 +216,7 @@ class DaskExcelProcessor:
 
         # Xác định các record có số điện thoại hợp lệ
         pdf_result["is_valid_phone"] = pdf_result["Số điện thoại"].apply(
-            self._is_valid_phone
+            is_valid_phone
         )
 
         # Tách thành hai DataFrame: valid và invalid
@@ -298,7 +229,7 @@ class DaskExcelProcessor:
         final_invalid_check = []
 
         for _, row in valid_df.iterrows():
-            if self._is_valid_phone(row["Số điện thoại"]):
+            if is_valid_phone(row["Số điện thoại"]):
                 final_valid_check.append(row)
             else:
                 final_invalid_check.append(row)
