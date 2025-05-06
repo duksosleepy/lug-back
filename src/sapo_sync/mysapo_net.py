@@ -4,8 +4,8 @@ from collections import OrderedDict
 
 import httpx
 
-from .config_manager import sapo_config
-from .utils import (
+from settings import sapo_settings
+from util import (
     convert_to_gmt7,
     get_adjusted_dates,
     get_sheets_service,
@@ -15,8 +15,8 @@ from .utils import (
 logger = logging.getLogger(__name__)
 
 # Lấy cấu hình từ config_manager thay vì hardcode
-SPREADSHEET_ID = sapo_config.spreadsheet_id
-RANGE_NAME = sapo_config.landing_site_range
+SPREADSHEET_ID = sapo_settings.spreadsheet_id
+RANGE_NAME = sapo_settings.landing_site_range
 
 
 async def fetch_orders(start_date, end_date):
@@ -32,7 +32,7 @@ async def fetch_orders(start_date, end_date):
     page = 1
 
     # Sử dụng base_url từ config_manager
-    base_url = sapo_config.get_mysapo_net_base_url()
+    base_url = sapo_settings.get_mysapo_net_base_url()
 
     while True:
         url = f"{base_url}/orders.json?page={page}&limit=250&created_on_min={adjusted_start_date}&created_on_max={adjusted_end_date}"

@@ -14,6 +14,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from sapo_sync import SapoSyncRequest, sync_mysapo, sync_mysapogo
+from settings import app_settings
+from util import format_phone_number, validate_excel_file
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -24,10 +26,7 @@ logger = logging.getLogger(__name__)
 # logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
 app = FastAPI()
 
-origins = [
-    "http://localhost:3000",
-    "http://localhost",
-]
+origins = app_settings.cors_origins
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,21 +36,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Định nghĩa các extensions được phép
-ALLOWED_EXTENSIONS = {".xlsx", ".xls"}
-
-# Email để gửi file lỗi
-ERROR_NOTIFICATION_EMAILS = [
-    "songkhoi123@gmail.com",
-    "nam.nguyen@lug.vn",
-    "dang.le@sangtam.com",
-    "tan.nguyen@sangtam.com",
-]
-
-# Email bổ sung cho process online
-ONLINE_ERROR_NOTIFICATION_EMAILS = ERROR_NOTIFICATION_EMAILS + [
-    "kiet.huynh@sangtam.com"
-]
+ALLOWED_EXTENSIONS = app_settings.allowed_extensions
+ERROR_NOTIFICATION_EMAILS = app_settings.error_notification_emails
+ONLINE_ERROR_NOTIFICATION_EMAILS = app_settings.online_error_notification_emails
 
 
 # Thêm endpoint này vào file src/api/server.py
@@ -98,16 +85,6 @@ async def sync_sapo(request_data: SapoSyncRequest):
         )
         raise HTTPException(
             status_code=500, detail=f"Lỗi khi xử lý đồng bộ Sapo: {str(e)}"
-        )
-
-
-def validate_excel_file(filename: str) -> None:
-    """Kiểm tra file có phải là file Excel không."""
-    suffix = Path(filename).suffix
-    if suffix not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Chỉ chấp nhận file Excel (.xlsx, .xls). File của bạn có đuôi: {suffix}",
         )
 
 
@@ -358,7 +335,7 @@ async def process_excel_file(
                     # Gửi dữ liệu đến API
                     async with httpx.AsyncClient(timeout=30.0) as client:
                         response = await client.post(
-                            "http://10.100.0.1:8081/api/v2/tables/mtvvlryi3xc0gqd/records",
+                            f"{app_settings.api_endpoint}/tables/mtvvlryi3xc0gqd/records",
                             json=transformed_records,
                             headers={
                                 "Content-Type": "application/json",
@@ -560,14 +537,14 @@ async def submit_warranty(request: WarrantyRequest):
 
     try:
         # Lấy xc-token từ biến môi trường
-        xc_token = os.environ.get("XC_TOKEN", "")
+        xc_token = app_settings.xc_token
 
         # Format số điện thoại
         formatted_phone = format_phone_number(request.phone)
 
         # Gọi API để tìm thông tin đơn hàng dựa trên mã đơn hàng
         order_code = request.order_code
-        search_url = f"http://10.100.0.1:8081/api/v2/tables/mtvvlryi3xc0gqd/records?where=(ma_don_hang%2Ceq%2C{order_code})&limit=1000&shuffle=0&offset=0"
+        search_url = f"{app_settings.api_endpoint}/tables/mtvvlryi3xc0gqd/records?where=(ma_don_hang%2Ceq%2C{order_code})&limit=1000&shuffle=0&offset=0"
 
         headers = {
             "accept": "application/json",
@@ -606,7 +583,7 @@ async def submit_warranty(request: WarrantyRequest):
                 }
 
                 # Lưu vào bảng mới
-                new_table_url = "http://10.100.0.1:8081/api/v2/tables/mydoap8edbr206g/records"
+                new_table_url = f"{app_settings.api_endpoint}/tables/mydoap8edbr206g/records"
 
                 try:
                     new_table_response = await client.post(
@@ -623,7 +600,7 @@ async def submit_warranty(request: WarrantyRequest):
                     logger.error(f"Error posting to new table: {str(e)}")
 
                 # Lưu thông tin vào bảng theo dõi
-                registration_url = "http://10.100.0.1:8081/api/v2/tables/miyw4f4yeojamv6/records"
+                registration_url = f"{app_settings.api_endpoint}/tables/miyw4f4yeojamv6/records"
 
                 registration_data = {
                     "ho_ten": request.name,
@@ -692,7 +669,7 @@ async def submit_warranty(request: WarrantyRequest):
 
             # Bước 3: Sao chép dữ liệu sang bảng đích
             copy_url = (
-                "http://10.100.0.1:8081/api/v2/tables/mffwo1asni22n9z/records"
+                f"{app_settings.api_endpoint}/tables/mffwo1asni22n9z/records"
             )
 
             logger.info(
@@ -713,7 +690,7 @@ async def submit_warranty(request: WarrantyRequest):
 
             # Bước 4: Xóa bản ghi gốc
             delete_url = (
-                "http://10.100.0.1:8081/api/v2/tables/mtvvlryi3xc0gqd/records"
+                f"{app_settings.api_endpoint}/tables/mtvvlryi3xc0gqd/records"
             )
 
             logger.info(f"Deleting {len(record_ids)} original records")
@@ -732,7 +709,7 @@ async def submit_warranty(request: WarrantyRequest):
 
             # Bước 5: Lưu thông tin người đăng ký vào bảng theo dõi
             registration_url = (
-                "http://10.100.0.1:8081/api/v2/tables/miyw4f4yeojamv6/records"
+                f"{app_settings.api_endpoint}/tables/miyw4f4yeojamv6/records"
             )
 
             registration_data = {
@@ -776,24 +753,3 @@ async def submit_warranty(request: WarrantyRequest):
             "success": False,
             "message": "Đã xảy ra lỗi khi xử lý đăng ký bảo hành.",
         }
-
-
-def format_phone_number(phone: str) -> str:
-    """
-    Chuyển đổi số điện thoại từ định dạng quốc tế (+84...) sang định dạng Việt Nam (0...)
-    """
-    if not phone:
-        return ""
-
-    # Loại bỏ khoảng trắng và các ký tự không cần thiết
-    phone = phone.strip()
-
-    # Nếu số điện thoại bắt đầu bằng +84, thay bằng 0
-    if phone.startswith("+84"):
-        return "0" + phone[3:]
-
-    # Nếu số điện thoại bắt đầu bằng 84 (không có dấu +), thay bằng 0
-    if phone.startswith("84") and not phone.startswith("0"):
-        return "0" + phone[2:]
-
-    return phone
