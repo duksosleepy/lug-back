@@ -1,10 +1,10 @@
-import configparser
 import logging
 import os
 
 from .mail_client import EmailClient
 
 logger = logging.getLogger(__name__)
+from settings import email_settings
 
 
 def load_config():
@@ -15,50 +15,7 @@ def load_config():
         dict: Thông tin cấu hình email
     """
     # Ưu tiên đọc từ biến môi trường
-    smtp_server = os.environ.get("SMTP_SERVER")
-    smtp_port = os.environ.get("SMTP_PORT")
-    email_address = os.environ.get("EMAIL_ADDRESS")
-    password = os.environ.get("EMAIL_PASSWORD")
-    # Nếu không có trong biến môi trường, thử đọc từ file cấu hình
-    if not all([smtp_server, smtp_port, email_address, password]):
-        try:
-            config = configparser.ConfigParser()
-            config_path = os.environ.get(
-                "EMAIL_CONFIG_PATH", "/etc/lug-back/email_config.ini"
-            )
-
-            if os.path.exists(config_path):
-                config.read(config_path)
-
-                smtp_server = smtp_server or config.get(
-                    "EMAIL", "SMTP_SERVER", fallback=None
-                )
-                smtp_port = smtp_port or config.get(
-                    "EMAIL", "SMTP_PORT", fallback=None
-                )
-                email_address = email_address or config.get(
-                    "EMAIL", "EMAIL_ADDRESS", fallback=None
-                )
-                password = password or config.get(
-                    "EMAIL", "PASSWORD", fallback=None
-                )
-            else:
-                logger.warning(f"File cấu hình {config_path} không tồn tại")
-        except (configparser.Error, FileNotFoundError) as e:
-            logger.error(f"Không thể đọc file cấu hình: {str(e)}")
-
-    # Kiểm tra xem đã có đủ thông tin cấu hình chưa
-    if not all([smtp_server, smtp_port, email_address, password]):
-        raise ValueError(
-            "Thiếu thông tin cấu hình email. Vui lòng kiểm tra lại biến môi trường hoặc file cấu hình."
-        )
-
-    return {
-        "smtp_server": smtp_server,
-        "smtp_port": int(smtp_port),
-        "email_address": email_address,
-        "password": password,
-    }
+    return email_settings.get_config_dict()
 
 
 def send_notification_email(

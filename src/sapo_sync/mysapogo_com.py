@@ -150,7 +150,7 @@ async def fetch_and_process_orders(start_date, end_date):
     }
 
     # Lấy headers từ config_manager
-    headers = sapo_config.get_mysapogo_com_headers()
+    headers = sapo_settings.get_mysapogo_com_headers()
 
     all_processed_orders = []
     current_page = 1
@@ -381,7 +381,7 @@ async def sync(start_date: str, end_date: str) -> dict:
     """
     try:
         # Kiểm tra thông tin xác thực trước khi thực hiện
-        if not sapo_config.access_token:
+        if not sapo_settings.access_token:
             return {
                 "status": "error",
                 "message": "Thiếu thông tin xác thực API Sapo (SAPO_ACCESS_TOKEN)",

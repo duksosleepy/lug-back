@@ -321,7 +321,7 @@ async def sync(start_date: str, end_date: str) -> dict:
     """
     try:
         # Kiểm tra thông tin xác thực trước khi thực hiện
-        if not sapo_config.api_key or not sapo_config.secret_key:
+        if not sapo_settings.api_key or not sapo_settings.secret_key:
             return {
                 "status": "error",
                 "message": "Thiếu thông tin xác thực API Sapo (SAPO_API_KEY hoặc SAPO_SECRET_KEY)",
