@@ -11,6 +11,8 @@ from loguru import logger
 
 from settings import app_settings
 
+from .helpers import get_logger, log_error_with_context, log_request_info
+
 
 class InterceptHandler(logging.Handler):
     """
@@ -147,4 +149,11 @@ def setup_logging(
 
 from .middleware import setup_fastapi_logging
 
-__all__ = ["setup_logging", "setup_fastapi_logging", "InterceptHandler"]
+__all__ = [
+    "setup_logging",
+    "setup_fastapi_logging",
+    "InterceptHandler",
+    "get_logger",
+    "log_request_info",
+    "log_error_with_context",
+]

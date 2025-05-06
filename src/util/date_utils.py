@@ -3,10 +3,11 @@ Tiện ích xử lý ngày tháng.
 Di chuyển từ src/sapo_sync/utils.py
 """
 
-import logging
 from datetime import datetime, timedelta
 
-logger = logging.getLogger(__name__)
+from util.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def convert_to_gmt7(iso_datetime_str):

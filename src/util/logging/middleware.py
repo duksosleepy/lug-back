@@ -56,15 +56,42 @@ class LoggingRoute(APIRoute):
         original_route_handler = super().get_route_handler()
 
         async def custom_route_handler(request: Request) -> Response:
-            req_body = await request.body()
+            # Kiểm tra content-type để xử lý đặc biệt các request multipart
+            content_type = request.headers.get("content-type", "")
 
-            # Log detailed request info
-            logger.debug(
-                f"API request: {request.method} {request.url.path}\n"
-                f"Headers: {request.headers}\n"
-                f"Query params: {request.query_params}\n"
-                f"Body: {req_body.decode() if req_body else None}"
-            )
+            # Log thông tin request theo content-type
+            if "multipart/form-data" in content_type:
+                # Đối với multipart/form-data, không cố gắng read/decode body
+                logger.debug(
+                    f"API request: {request.method} {request.url.path}\n"
+                    f"Headers: {request.headers}\n"
+                    f"Query params: {request.query_params}\n"
+                    f"Body: [multipart form data - not displayed]"
+                )
+            else:
+                # Với các content-type khác, có thể log body
+                try:
+                    req_body = await request.body()
+                    body_str = (
+                        req_body.decode("utf-8", errors="replace")
+                        if req_body
+                        else None
+                    )
+                    # Giới hạn kích thước body hiển thị trong log để tránh spam
+                    if body_str and len(body_str) > 1000:
+                        body_str = f"{body_str[:1000]}... [truncated]"
+
+                    logger.debug(
+                        f"API request: {request.method} {request.url.path}\n"
+                        f"Headers: {request.headers}\n"
+                        f"Query params: {request.query_params}\n"
+                        f"Body: {body_str}"
+                    )
+                except Exception as e:
+                    # Nếu không thể đọc body, ghi log lỗi nhưng không làm gián đoạn request
+                    logger.warning(
+                        f"Cannot log request body: {request.method} {request.url.path} - Error: {str(e)}"
+                    )
 
             start_time = time.time()
 

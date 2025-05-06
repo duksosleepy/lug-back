@@ -3,7 +3,6 @@ Tiện ích cho Google API.
 Di chuyển từ src/sapo_sync/credentials_manager.py
 """
 
-import logging
 from typing import Optional
 
 from google.oauth2 import service_account
@@ -11,8 +10,9 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
 from settings import google_settings
+from util.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def get_credentials() -> Optional[Credentials]:

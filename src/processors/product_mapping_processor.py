@@ -1,12 +1,13 @@
 import io
-import logging
 import re
 from pathlib import Path
 from typing import Dict, List, Tuple, Union
 
 import pandas as pd
 
-logger = logging.getLogger(__name__)
+from util.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class ProductMappingProcessor:

@@ -1,9 +1,10 @@
-import logging
 from typing import Any, Callable, Dict, List, Optional
+
+from util.logging import get_logger
 
 from .base import BaseSettings
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class SentrySettings(BaseSettings):

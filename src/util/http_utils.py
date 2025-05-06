@@ -3,14 +3,14 @@ Tiện ích cho HTTP requests.
 """
 
 import json
-import logging
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
 from settings import app_settings
+from util.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def post_json_data(

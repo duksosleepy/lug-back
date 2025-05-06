@@ -6,7 +6,10 @@ from typing import List, Optional, Tuple, Union
 import dask.dataframe as dd
 import pandas as pd
 
+from util.logging import get_logger
 from util.phone_utils import format_phone_number, is_valid_phone
+
+logger = get_logger(__name__)
 
 
 @dataclass

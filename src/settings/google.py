@@ -1,13 +1,14 @@
 import base64
 import json
-import logging
 import os
 from pathlib import Path
 from typing import List, Optional
 
+from util.logging import get_logger
+
 from .base import BaseSettings
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class GoogleSettings(BaseSettings):

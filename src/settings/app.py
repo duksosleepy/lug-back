@@ -1,9 +1,10 @@
-import logging
 from typing import List
+
+from util.logging import get_logger
 
 from .base import BaseSettings
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class AppSettings(BaseSettings):

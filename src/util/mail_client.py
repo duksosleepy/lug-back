@@ -1,11 +1,12 @@
-import logging
 import os
 import smtplib
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-logger = logging.getLogger(__name__)
+from util.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class EmailClient:

@@ -1,10 +1,11 @@
-import logging
 import os
+
+from settings import email_settings
+from util.logging import get_logger
 
 from .mail_client import EmailClient
 
-logger = logging.getLogger(__name__)
-from settings import email_settings
+logger = get_logger(__name__)
 
 
 def load_config():

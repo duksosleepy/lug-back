@@ -2,14 +2,15 @@
 Tiện ích xử lý số điện thoại.
 """
 
-import logging
 import re
 from typing import Optional
 
 import pandas as pd
 import phonenumbers
 
-logger = logging.getLogger(__name__)
+from util.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def is_valid_phone(phone: str) -> bool:

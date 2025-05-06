@@ -1,9 +1,10 @@
-import logging
 from typing import Dict
+
+from util.logging import get_logger
 
 from .base import BaseSettings
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class EmailSettings(BaseSettings):

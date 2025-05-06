@@ -1,5 +1,4 @@
 import json
-import logging
 import re
 from collections import OrderedDict
 
@@ -12,8 +11,9 @@ from util import (
     get_sheets_service,
     update_sheet_with_retry,
 )
+from util.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Lấy cấu hình từ config_manager thay vì hardcode
 SPREADSHEET_ID = sapo_settings.spreadsheet_id

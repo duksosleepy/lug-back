@@ -3,10 +3,12 @@ Utility for Sentry error tracking integration.
 """
 
 import sentry_sdk
-from loguru import logger
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 
 from settings import sentry_settings
+from util.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def init():

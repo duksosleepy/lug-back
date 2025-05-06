@@ -1,5 +1,4 @@
 import configparser
-import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional, TypeVar
@@ -9,7 +8,9 @@ from dotenv import load_dotenv
 
 T = TypeVar("T")
 
-logger = logging.getLogger(__name__)
+from util.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class BaseSettings:
