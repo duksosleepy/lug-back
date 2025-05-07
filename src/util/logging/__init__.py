@@ -9,8 +9,8 @@ from typing import Dict, List, Union
 
 from loguru import logger
 
-from settings import app_settings
-
+# Xóa import này để tránh import cycle
+# from settings import app_settings
 from .helpers import get_logger, log_error_with_context, log_request_info
 
 
@@ -82,15 +82,18 @@ def setup_logging(
     if log_to_file:
         # Try to create logs directory
         try:
+            # Động thái import settings khi cần
+            from settings import app_settings
+
             # First attempt: use the configured data_dir
             log_dir = Path(app_settings.data_dir) / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
-        except (PermissionError, FileNotFoundError):
+        except (PermissionError, FileNotFoundError, ImportError):
             # Fallback: use user's home directory
             log_dir = Path.home() / ".local" / "share" / "lug-back" / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
             logger.warning(
-                f"Cannot write to {app_settings.data_dir}/logs, using {log_dir} instead"
+                f"Cannot write to data_dir/logs, using {log_dir} instead"
             )
 
         # Define log file path

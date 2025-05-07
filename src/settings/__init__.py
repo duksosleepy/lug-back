@@ -38,9 +38,4 @@ __all__ = [
     "sapo_settings",
     "google_settings",
     "sentry_settings",
-    "AppSettings",
-    "EmailSettings",
-    "SapoSettings",
-    "GoogleSettings",
-    "SentrySettings",
 ]
