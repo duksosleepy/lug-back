@@ -3,25 +3,23 @@ Tiện ích cho Google API.
 Di chuyển từ src/sapo_sync/credentials_manager.py
 """
 
-from typing import Optional
-
-from google.oauth2 import service_account
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
-
-from settings import google_settings
 from util.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-def get_credentials() -> Optional[Credentials]:
+def get_credentials():
     """
     Tạo credentials từ thông tin trong settings.
 
     Returns:
         Optional[Credentials]: Đối tượng credentials hoặc None nếu không thể tạo
     """
+    # Lazy import to avoid circular dependency
+    from google.oauth2 import service_account
+
+    from settings import google_settings
+
     credentials_info = google_settings.get_credentials_info()
     if not credentials_info:
         return None
@@ -38,10 +36,16 @@ def get_sheets_service():
     Returns:
         Resource: Google Sheets API service
     """
+    # Lazy import to avoid circular dependency
+    from googleapiclient.discovery import build
+
     SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
     credentials = get_credentials()
     if not credentials:
+        # Lazy import to avoid circular dependency
+        from settings import google_settings
+
         error_msg = google_settings.show_detailed_error()
         logger.error(error_msg)
         raise FileNotFoundError(

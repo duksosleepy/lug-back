@@ -1,6 +1,5 @@
 import os
 
-from settings import email_settings
 from util.logging import get_logger
 
 from .mail_client import EmailClient
@@ -15,6 +14,9 @@ def load_config():
     Returns:
         dict: Thông tin cấu hình email
     """
+    # Lazy import to avoid circular dependency
+    from settings import email_settings
+
     # Ưu tiên đọc từ biến môi trường
     return email_settings.get_config_dict()
 

@@ -7,7 +7,6 @@ from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
-from settings import app_settings
 from util.logging import get_logger
 
 logger = get_logger(__name__)
@@ -31,11 +30,16 @@ async def post_json_data(
     Returns:
         Dict[str, Any]: Kết quả trả về từ API
     """
+    # Lazy import to avoid circular dependency
     if token is None:
+        from settings import app_settings
+
         token = app_settings.xc_token
 
     if not endpoint.startswith("http"):
         # Nếu endpoint không có scheme, thêm base URL từ settings
+        from settings import app_settings
+
         full_url = f"{app_settings.api_endpoint}/{endpoint.lstrip('/')}"
     else:
         full_url = endpoint
@@ -89,11 +93,16 @@ async def get_json_data(
     Returns:
         Dict[str, Any]: Dữ liệu JSON từ API
     """
+    # Lazy import to avoid circular dependency
     if token is None:
+        from settings import app_settings
+
         token = app_settings.xc_token
 
     if not endpoint.startswith("http"):
         # Nếu endpoint không có scheme, thêm base URL từ settings
+        from settings import app_settings
+
         full_url = f"{app_settings.api_endpoint}/{endpoint.lstrip('/')}"
     else:
         full_url = endpoint

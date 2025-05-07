@@ -41,7 +41,7 @@ class InterceptHandler(logging.Handler):
 def setup_logging(
     log_level: str = "INFO",
     json_logs: bool = False,
-    log_to_file: bool = False,  # Changed default to False
+    log_to_file: bool = False,
 ):
     """
     Set up Loguru logging for the application.
@@ -80,20 +80,21 @@ def setup_logging(
 
     # Add file handler if requested
     if log_to_file:
+        # Get data directory from environment or use default
+        import os
+
+        data_dir = os.environ.get("DATA_DIR", "/var/lib/lug-back")
+
         # Try to create logs directory
         try:
-            # Động thái import settings khi cần
-            from settings import app_settings
-
-            # First attempt: use the configured data_dir
-            log_dir = Path(app_settings.data_dir) / "logs"
+            log_dir = Path(data_dir) / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
-        except (PermissionError, FileNotFoundError, ImportError):
+        except (PermissionError, FileNotFoundError):
             # Fallback: use user's home directory
             log_dir = Path.home() / ".local" / "share" / "lug-back" / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
             logger.warning(
-                f"Cannot write to data_dir/logs, using {log_dir} instead"
+                f"Cannot write to {data_dir}/logs, using {log_dir} instead"
             )
 
         # Define log file path

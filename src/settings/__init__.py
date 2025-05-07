@@ -3,6 +3,7 @@ Settings module quản lý tập trung tất cả cấu hình cho ứng dụng.
 Sử dụng lớp Settings từ các module tương ứng để truy cập cấu hình.
 """
 
+# Import các class settings
 # Import các lớp settings
 from pathlib import Path
 
