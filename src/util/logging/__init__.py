@@ -54,11 +54,8 @@ def setup_logging(
     # Remove default loguru handler
     logger.remove()
 
-    # Intercept standard logging
-    logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
-
     # Configure handlers
-    handlers: List[Dict[str, Union[str, bool, int]]] = [
+    handlers = [
         # Console handler
         {
             "sink": sys.stderr,
@@ -99,7 +96,6 @@ def setup_logging(
 
         # Define log file path
         log_file = log_dir / "lug-back.log"
-
         logger.info(f"Logging to file: {log_file}")
 
         # Add rotation configuration
@@ -128,16 +124,26 @@ def setup_logging(
     for handler in handlers:
         logger.configure(handlers=[handler])
 
-    # Update Sentry SDK's internal logger to use Loguru
-    for name in [
+    # CHANGE THIS SECTION to avoid duplicate logs
+    # Intercept standard logging (only do this ONCE)
+    for _name in [
+        "uvicorn",
+        "uvicorn.error",
+        "uvicorn.access",
+        "fastapi",
         "sentry_sdk",
         "sentry_sdk.errors",
         "sentry_sdk.integrations",
-        "uvicorn",
-        "uvicorn.error",
-        "fastapi",
     ]:
-        logging.getLogger(name).handlers = [InterceptHandler()]
+        # Existing handlers might be causing duplicates
+        # Remove existing handlers before adding our interceptor
+        _logger = logging.getLogger(_name)
+        if _logger.handlers:
+            for handler in _logger.handlers:
+                _logger.removeHandler(handler)
+        _logger.handlers = [InterceptHandler()]
+        # Prevent propagation to avoid duplicate handling
+        _logger.propagate = False
 
     # Set level for specific loggers if needed
     for name, level in [
@@ -147,6 +153,9 @@ def setup_logging(
         ("httpcore.http11", "WARNING"),
     ]:
         logging.getLogger(name).setLevel(getattr(logging, level))
+
+    # This must remain AFTER setting up the above loggers to prevent duplicate logs
+    logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
 
     return logger
 

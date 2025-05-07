@@ -164,9 +164,9 @@ class DaskExcelProcessor:
         filtered_df = df[phone_mask]
 
         # Debug info
-        print("\n=== DEBUG: KL RECORDS FILTERING ===")
-        print(f"Records with phone number 0912345678: {phone_mask.sum()}")
-        print("====================================\n")
+        logger.debug(
+            f"KL RECORDS FILTERING: Records with phone number 0912345678: {phone_mask.sum()}"
+        )
 
         return filtered_df
 

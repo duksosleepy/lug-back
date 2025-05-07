@@ -27,11 +27,56 @@ else:
 
 
 # Khởi tạo và export các instances
-app_settings = AppSettings()
-email_settings = EmailSettings()
-sapo_settings = SapoSettings()
-google_settings = GoogleSettings()
-sentry_settings = SentrySettings()
+# Private variables to hold settings instances
+_app_settings = None
+_email_settings = None
+_sapo_settings = None
+_google_settings = None
+_sentry_settings = None
+
+
+# Lazy loading functions
+def get_app_settings():
+    global _app_settings
+    if _app_settings is None:
+        _app_settings = AppSettings()
+    return _app_settings
+
+
+def get_email_settings():
+    global _email_settings
+    if _email_settings is None:
+        _email_settings = EmailSettings()
+    return _email_settings
+
+
+def get_sapo_settings():
+    global _sapo_settings
+    if _sapo_settings is None:
+        _sapo_settings = SapoSettings()
+    return _sapo_settings
+
+
+def get_google_settings():
+    global _google_settings
+    if _google_settings is None:
+        _google_settings = GoogleSettings()
+    return _google_settings
+
+
+def get_sentry_settings():
+    global _sentry_settings
+    if _sentry_settings is None:
+        _sentry_settings = SentrySettings()
+    return _sentry_settings
+
+
+# For backward compatibility
+app_settings = get_app_settings()
+email_settings = get_email_settings()
+sapo_settings = get_sapo_settings()
+google_settings = get_google_settings()
+sentry_settings = get_sentry_settings()
 
 __all__ = [
     "app_settings",
