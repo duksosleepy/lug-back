@@ -532,10 +532,12 @@ async def submit_warranty(request: WarrantyRequest):
     """
     Process warranty registration form submissions.
 
-    1. Tìm kiếm đơn hàng theo mã đơn hàng
-    2. Sao chép thông tin đơn hàng sang bảng khác
-    3. Xóa bản ghi gốc
-    4. Lưu thông tin người đăng ký vào bảng theo dõi
+    1. Check if order code already registered in miyw4f4yeojamv6 table
+    2. If not registered, continue with:
+       a. Tìm kiếm đơn hàng theo mã đơn hàng
+       b. Sao chép thông tin đơn hàng sang bảng khác
+       c. Xóa bản ghi gốc
+       d. Lưu thông tin người đăng ký vào bảng theo dõi
     """
     logger.info(
         f"Received warranty registration for {request.name} with order code {request.order_code}"
@@ -548,9 +550,9 @@ async def submit_warranty(request: WarrantyRequest):
         # Format số điện thoại
         formatted_phone = format_phone_number(request.phone)
 
-        # Gọi API để tìm thông tin đơn hàng dựa trên mã đơn hàng
+        # First, check if the order code has already been registered
         order_code = request.order_code
-        search_url = f"{app_settings.api_endpoint}/tables/mtvvlryi3xc0gqd/records?where=(ma_don_hang%2Ceq%2C{order_code})&limit=1000&shuffle=0&offset=0"
+        check_url = f"{app_settings.api_endpoint}/tables/miyw4f4yeojamv6/records?where=(ma_don_hang%2Ceq%2C{order_code})&limit=1"
 
         headers = {
             "accept": "application/json",
@@ -559,7 +561,35 @@ async def submit_warranty(request: WarrantyRequest):
         }
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            # Bước 1: Tìm kiếm thông tin đơn hàng
+            # Check if order code already exists in the warranty registration table
+            check_response = await client.get(check_url, headers=headers)
+
+            if check_response.status_code != 200:
+                logger.error(
+                    f"Error checking order registration: {check_response.status_code} - {check_response.text}"
+                )
+                return {
+                    "success": False,
+                    "message": f"Lỗi khi kiểm tra đơn hàng: {check_response.status_code}",
+                }
+
+            check_data = check_response.json()
+            existing_records = check_data.get("list", [])
+
+            # If the order code already exists, return a specific response
+            if existing_records:
+                logger.info(
+                    f"Order code {order_code} has already been registered for warranty"
+                )
+                return {
+                    "success": False,
+                    "message": "Mã đơn hàng này đã được đăng ký bảo hành trước đó.",
+                    "already_registered": True,
+                }
+
+            # Gọi API để tìm thông tin đơn hàng dựa trên mã đơn hàng
+            search_url = f"{app_settings.api_endpoint}/tables/mtvvlryi3xc0gqd/records?where=(ma_don_hang%2Ceq%2C{order_code})&limit=1000&shuffle=0&offset=0"
+
             logger.info(f"Searching for order with code: {order_code}")
             search_response = await client.get(search_url, headers=headers)
 
@@ -738,7 +768,7 @@ async def submit_warranty(request: WarrantyRequest):
 
             return {
                 "success": True,
-                "message": "Đăng ký bảo hành thành công!",
+                "message": "Đăng ký bảo hành thành công! Vui lòng kiểm tra app lugID",
                 "items_processed": len(records_to_copy),
                 "order_found": True,
             }
