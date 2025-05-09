@@ -3,9 +3,10 @@ Utility for Sentry error tracking integration.
 """
 
 import sentry_sdk
+from sentry_sdk.integrations.celery import CeleryIntegration
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 
-from settings import sentry_settings
+from src.settings import sentry_settings
 from util.logging import get_logger
 
 logger = get_logger(__name__)
@@ -32,9 +33,7 @@ def init():
             release=sentry_settings.release,
             before_send=sentry_settings.get_before_send(),  # Get function from settings
             send_default_pii=True,
-            integrations=[
-                FastApiIntegration(),
-            ],
+            integrations=[FastApiIntegration(), CeleryIntegration()],
             traces_sample_rate=sentry_settings.traces_sample_rate,
         )
         logger.info("Sentry initialization complete")

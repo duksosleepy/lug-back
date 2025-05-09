@@ -532,12 +532,9 @@ async def submit_warranty(request: WarrantyRequest):
     """
     Process warranty registration form submissions.
 
-    1. Check if order code already registered in miyw4f4yeojamv6 table
-    2. If not registered, continue with:
-       a. Tìm kiếm đơn hàng theo mã đơn hàng
-       b. Sao chép thông tin đơn hàng sang bảng khác
-       c. Xóa bản ghi gốc
-       d. Lưu thông tin người đăng ký vào bảng theo dõi
+    - Kiểm tra xem mã đơn hàng đã đăng ký chưa
+    - Kiểm tra có trong bảng mtvvlryi3xc0gqd không
+    - Tìm kiếm trong bảng mydoap8edbr206g để phát hiện đăng ký trùng
     """
     logger.info(
         f"Received warranty registration for {request.name} with order code {request.order_code}"
@@ -604,6 +601,57 @@ async def submit_warranty(request: WarrantyRequest):
 
             search_data = search_response.json()
             records = search_data.get("list", [])
+
+            # THÊM MỚI: Kiểm tra xem đơn hàng có trong bảng tạm không
+            if not records:
+                logger.info(
+                    f"Checking if order {order_code} exists in pending table"
+                )
+                pending_url = f"{app_settings.api_endpoint}/tables/mydoap8edbr206g/records?where=(ma_don_hang%2Ceq%2C{order_code})&limit=1"
+
+                pending_response = await client.get(
+                    pending_url, headers=headers
+                )
+                if pending_response.status_code == 200:
+                    pending_data = pending_response.json()
+                    pending_records = pending_data.get("list", [])
+
+                    if pending_records:
+                        logger.info(
+                            f"Order code {order_code} found in pending registrations"
+                        )
+                        # Cập nhật thông tin liên hệ cho bản ghi chờ
+                        pending_id = pending_records[0].get("Id")
+                        update_url = f"{app_settings.api_endpoint}/tables/mydoap8edbr206g/records/{pending_id}"
+
+                        update_data = {
+                            "ho_ten": request.name,
+                            "so_dien_thoai": formatted_phone,
+                            "noi_mua": request.purchase_platform or "website",
+                        }
+
+                        update_response = await client.patch(
+                            update_url, headers=headers, json=update_data
+                        )
+                        if update_response.status_code == 200:
+                            logger.info(
+                                f"Updated pending registration for order {order_code}"
+                            )
+                        else:
+                            logger.warning(
+                                f"Failed to update pending registration: {update_response.status_code}"
+                            )
+
+                        # Kích hoạt task Celery ngay lập tức
+                        from src.tasks.worker import sync_pending_registrations
+
+                        sync_pending_registrations.delay()
+
+                        return {
+                            "success": True,
+                            "message": "Đơn hàng của bạn đã được ghi nhận, chúng tôi sẽ xử lý sớm nhất có thể.",
+                            "pending": True,
+                        }
 
             # Nếu không tìm thấy đơn hàng, lưu thông tin vào bảng mydoap8edbr206g
             if not records:

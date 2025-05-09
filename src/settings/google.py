@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import List, Optional
 
-from util.logging import get_logger
+from src.util.logging import get_logger
 
 from .base import BaseSettings
 

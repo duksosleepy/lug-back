@@ -1,6 +1,6 @@
 from typing import Any, Callable, Dict, List, Optional
 
-from util.logging import get_logger
+from src.util.logging import get_logger
 
 from .base import BaseSettings
 

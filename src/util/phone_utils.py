@@ -8,7 +8,7 @@ from typing import Optional
 import pandas as pd
 import phonenumbers
 
-from util.logging import get_logger
+from src.util.logging import get_logger
 
 logger = get_logger(__name__)
 
