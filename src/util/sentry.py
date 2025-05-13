@@ -31,7 +31,7 @@ def init():
             dsn=sentry_settings.dsn,
             environment=sentry_settings.environment,
             release=sentry_settings.release,
-            before_send=sentry_settings.get_before_send(),  # Get function from settings
+            # before_send=sentry_settings.get_before_send(),
             send_default_pii=True,
             integrations=[FastApiIntegration(), CeleryIntegration()],
             traces_sample_rate=sentry_settings.traces_sample_rate,

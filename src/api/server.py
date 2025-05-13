@@ -837,3 +837,8 @@ async def submit_warranty(request: WarrantyRequest):
             "success": False,
             "message": "Đã xảy ra lỗi khi xử lý đăng ký bảo hành.",
         }
+
+
+@app.get("/sentry")
+async def sentry():
+    raise Exception("Test sentry integration")

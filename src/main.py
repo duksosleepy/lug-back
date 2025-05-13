@@ -1,5 +1,7 @@
 import uvicorn
 
+from util.sentry import init as init_sentry
+
 
 def main():
     # Import modules inside function to avoid import issues
@@ -12,6 +14,7 @@ def main():
         json_logs=False,
         log_to_file=False,
     )
+    init_sentry()
 
     logger.info(
         f"Starting {app_settings.app_name} in {'debug' if app_settings.debug else 'production'} mode"
