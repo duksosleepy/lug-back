@@ -203,26 +203,34 @@ class ProductMappingProcessor:
             raise
 
     def _levenshtein_distance(self, str1, str2):
-        if not str1:
-            return len(str2) if str2 else 0
-        if not str2:
-            return len(str1)
+        try:
+            # Try to use a specialized library
+            import Levenshtein
 
-        dp = [[0] * (len(str2) + 1) for _ in range(len(str1) + 1)]
+            return Levenshtein.distance(str1 or "", str2 or "")
+        except ImportError:
+            # Fall back to a more efficient custom implementation
+            if not str1:
+                return len(str2) if str2 else 0
+            if not str2:
+                return len(str1)
 
-        for i in range(len(str1) + 1):
-            dp[i][0] = i
-        for j in range(len(str2) + 1):
-            dp[0][j] = j
+            # Use a single row for dynamic programming (reduced memory)
+            prev_row = range(len(str2) + 1)
+            for i, c1 in enumerate(str1):
+                curr_row = [i + 1]
+                for j, c2 in enumerate(str2):
+                    cost = 0 if c1 == c2 else 1
+                    curr_row.append(
+                        min(
+                            curr_row[j] + 1,
+                            prev_row[j + 1] + 1,
+                            prev_row[j] + cost,
+                        )
+                    )
+                prev_row = curr_row
 
-        for i in range(1, len(str1) + 1):
-            for j in range(1, len(str2) + 1):
-                cost = 0 if str1[i - 1] == str2[j - 1] else 1
-                dp[i][j] = min(
-                    dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost
-                )
-
-        return dp[len(str1)][len(str2)]
+            return prev_row[-1]
 
     def _find_closest_match(
         self, code, mapping_df, new_code_col, old_code_col, threshold=0.75

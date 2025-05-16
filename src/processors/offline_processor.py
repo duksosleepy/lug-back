@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 import dask.dataframe as dd
+import numpy as np
 import pandas as pd
 
 from util.logging import get_logger
@@ -153,33 +154,48 @@ class DaskExcelProcessor:
     @staticmethod
     def split_rows_by_quantity(df: dd.DataFrame) -> dd.DataFrame:
         pdf = df.compute()
+
         if pdf.empty:
             return dd.from_pandas(pdf, npartitions=1)
-        all_rows = []
-        rows_no_expand = pdf[pdf["Số lượng"] <= 1]
-        if not rows_no_expand.empty:
-            all_rows.append(rows_no_expand)
+
+        # Keep rows with quantity <= 1 as is
+        rows_no_expand = pdf[pdf["Số lượng"] <= 1].copy()
+
+        # Process rows with quantity > 1
         rows_to_expand = pdf[pdf["Số lượng"] > 1]
+
         if not rows_to_expand.empty:
-            expanded_list = []
-            for _, row in rows_to_expand.iterrows():
-                quantity = int(row["Số lượng"])
-                unit_revenue = (
-                    row["Doanh thu"] / quantity if quantity > 0 else 0
+            # Create repeating indices based on quantity
+            rep_indices = np.repeat(
+                rows_to_expand.index.values,
+                rows_to_expand["Số lượng"].astype(int).values,
+            )
+
+            # Create expanded DataFrame using loc
+            expanded_df = rows_to_expand.loc[rep_indices].copy()
+
+            # Calculate unit revenue
+            expanded_df["Doanh thu"] = expanded_df.apply(
+                lambda row: row["Doanh thu"] / row["Số lượng"]
+                if row["Số lượng"] > 0
+                else 0,
+                axis=1,
+            )
+
+            # Set quantity to 1
+            expanded_df["Số lượng"] = 1
+            expanded_df = expanded_df.reset_index(drop=True)
+
+            # Combine with non-expanded rows
+            if not rows_no_expand.empty:
+                result_df = pd.concat(
+                    [rows_no_expand, expanded_df], ignore_index=True
                 )
-                expanded_rows = pd.DataFrame([row.to_dict()] * quantity)
-                expanded_rows["Số lượng"] = 1
-                expanded_rows["Doanh thu"] = unit_revenue
-                expanded_list.append(expanded_rows)
-            if expanded_list:
-                expanded_df = pd.concat(expanded_list, ignore_index=True)
-                all_rows.append(expanded_df)
-        if all_rows:
-            for i in range(len(all_rows)):
-                all_rows[i] = all_rows[i].astype(pdf.dtypes)
-            result_df = pd.concat(all_rows, ignore_index=True)
+            else:
+                result_df = expanded_df
         else:
-            result_df = pd.DataFrame(columns=pdf.columns).astype(pdf.dtypes)
+            result_df = rows_no_expand
+
         return dd.from_pandas(result_df, npartitions=4)
 
     @staticmethod

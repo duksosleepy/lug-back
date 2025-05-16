@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import dask.dataframe as dd
+import numpy as np
 import pandas as pd
 
 from util.logging import get_logger
@@ -103,24 +104,55 @@ class DaskExcelProcessor:
         ]
 
     def _split_rows_by_quantity(self, df: dd.DataFrame) -> dd.DataFrame:
+        """
+        Optimized method to split rows based on quantity using NumPy vectorization.
+        """
+
+        # Convert Dask DataFrame to pandas
         pdf = df.compute()
-        new_rows = []
-        for idx, row in pdf.iterrows():
-            quantity = row["Số lượng"]
-            if pd.isna(quantity) or quantity <= 1:
-                new_rows.append(pd.Series(row))
-            else:
-                unit_revenue = (
-                    row["Doanh thu"] / quantity
-                    if pd.notna(row["Doanh thu"])
-                    else 0
-                )
-                for _ in range(int(quantity)):
-                    new_row = row.copy()
-                    new_row["Số lượng"] = 1
-                    new_row["Doanh thu"] = unit_revenue
-                    new_rows.append(new_row)
-        return dd.from_pandas(pd.DataFrame(new_rows), npartitions=4)
+
+        if pdf.empty:
+            return dd.from_pandas(pdf, npartitions=1)
+
+        # Separate rows that don't need expansion (quantity <= 1 or NA)
+        mask_no_expand = pdf["Số lượng"].isna() | (pdf["Số lượng"] <= 1)
+        rows_no_expand = pdf[mask_no_expand].copy()
+        rows_to_expand = pdf[~mask_no_expand].copy()
+
+        if rows_to_expand.empty:
+            return dd.from_pandas(rows_no_expand, npartitions=4)
+
+        # Convert quantities to integers and handle missing values
+        quantities = np.maximum(
+            rows_to_expand["Số lượng"].fillna(1).astype(int).values, 1
+        )
+
+        # Create repeating indices
+        indices = np.arange(len(rows_to_expand))
+        repeat_indices = np.repeat(indices, quantities)
+
+        # Create expanded DataFrame
+        expanded_df = rows_to_expand.iloc[repeat_indices].reset_index(drop=True)
+
+        # Calculate unit revenues once for all rows
+        unit_revenues = np.zeros(len(rows_to_expand))
+        valid_mask = (rows_to_expand["Doanh thu"].notna()) & (quantities > 0)
+        unit_revenues[valid_mask] = (
+            rows_to_expand.loc[valid_mask, "Doanh thu"].values
+            / quantities[valid_mask]
+        )
+
+        # Assign unit revenues to expanded rows
+        expanded_df["Doanh thu"] = unit_revenues[np.repeat(indices, quantities)]
+
+        # Set all quantities to 1
+        expanded_df["Số lượng"] = 1
+
+        # Combine non-expanded and expanded rows
+        result_df = pd.concat([rows_no_expand, expanded_df], ignore_index=True)
+
+        # Return as Dask DataFrame with appropriate partitions
+        return dd.from_pandas(result_df, npartitions=4)
 
     def _process_final(
         self, df: pd.DataFrame, format_phone: bool = True
