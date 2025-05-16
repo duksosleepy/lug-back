@@ -98,6 +98,7 @@ class DaskExcelProcessor:
             self.input_file,
             sheet_name="Sheet1",
             dtype={"Số Ctừ": str, "Số điện thoại": str, "Imei": str},
+            engine="calamine",
         )
 
         # Chỉ giữ lại các mã chứng từ được chỉ định

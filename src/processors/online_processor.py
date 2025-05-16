@@ -76,6 +76,7 @@ class DaskExcelProcessor:
             self.input_file,
             sheet_name="Sheet1",
             dtype={"Số Ctừ": str, "Số điện thoại": str, "Imei": str},
+            engine="calamine",
         )
         df = (
             df[df["Tên vật tư"].notna()]

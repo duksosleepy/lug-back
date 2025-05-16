@@ -148,9 +148,7 @@ class ProductMappingProcessor:
     def _load_mapping_data(self) -> Tuple[pd.DataFrame, Dict[str, str]]:
         try:
             df_mapping = pd.read_excel(
-                self.mapping_file,
-                sheet_name=0,
-                dtype=str,
+                self.mapping_file, sheet_name=0, dtype=str, engine="calamine"
             )
 
             df_mapping = df_mapping.fillna("")
@@ -170,9 +168,7 @@ class ProductMappingProcessor:
     def _load_data_file(self) -> pd.DataFrame:
         try:
             df_data = pd.read_excel(
-                self.data_file,
-                sheet_name=0,
-                dtype=str,
+                self.data_file, sheet_name=0, dtype=str, engine="calamine"
             )
 
             if "Mã hàng" not in df_data.columns:
