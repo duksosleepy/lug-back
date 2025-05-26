@@ -42,6 +42,18 @@ wheels = [
 ]
 
 [[package]]
+name = "basedpyright"
+version = "1.29.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "nodejs-wheel-binaries" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b9/18/f5e488eac4960ad9a2e71b95f0d91cf93a982c7f68aa90e4e0554f0bc37e/basedpyright-1.29.1.tar.gz", hash = "sha256:06bbe6c3b50ab4af20f80e154049477a50d8b81d2522eadbc9f472f2f92cd44b", size = 21773469, upload-time = "2025-04-23T13:29:42.47Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/95/1b/1bb837bbb7e259928f33d3c105dfef4f5349ef08b3ef45576801256e3234/basedpyright-1.29.1-py3-none-any.whl", hash = "sha256:b7eb65b9d4aaeeea29a349ac494252032a75a364942d0ac466d7f07ddeacc786", size = 11397959, upload-time = "2025-04-23T13:29:38.106Z" },
+]
+
+[[package]]
 name = "billiard"
 version = "4.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -585,6 +597,7 @@ dependencies = [
     { name = "pandas", extra = ["excel", "performance"] },
     { name = "phonenumbers" },
     { name = "pyarrow" },
+    { name = "pylimbo" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
     { name = "sentry-sdk", extra = ["celery", "fastapi"] },
@@ -594,6 +607,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "basedpyright" },
     { name = "ruff" },
 ]
 
@@ -613,6 +627,7 @@ requires-dist = [
     { name = "pandas", extras = ["excel", "performance"], specifier = ">=2.2.3" },
     { name = "phonenumbers", specifier = ">=8.13.55" },
     { name = "pyarrow", specifier = ">=19.0.0" },
+    { name = "pylimbo", specifier = ">=0.0.20" },
     { name = "python-dotenv", specifier = ">=1.1.0" },
     { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "sentry-sdk", extras = ["celery", "fastapi"], specifier = ">=2.27.0" },
@@ -621,7 +636,10 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "ruff", specifier = ">=0.11.8" }]
+dev = [
+    { name = "basedpyright", specifier = ">=1.29.1" },
+    { name = "ruff", specifier = ">=0.11.8" },
+]
 
 [[package]]
 name = "markdown-it-py"
@@ -712,6 +730,22 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/df/91/6c93b6a95e6a99ef929a99d019fbf5b5f7fd3368389a0b1ec7ce0a23565b/multipart-1.2.1.tar.gz", hash = "sha256:829b909b67bc1ad1c6d4488fcdc6391c2847842b08323addf5200db88dbe9480", size = 36507, upload-time = "2024-11-29T08:45:48.818Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/cc/d1/3598d1e73385baaab427392856f915487db7aa10abadd436f8f2d3e3b0f9/multipart-1.2.1-py3-none-any.whl", hash = "sha256:c03dc203bc2e67f6b46a599467ae0d87cf71d7530504b2c1ff4a9ea21d8b8c8c", size = 13730, upload-time = "2024-11-29T08:45:44.557Z" },
+]
+
+[[package]]
+name = "nodejs-wheel-binaries"
+version = "22.15.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/08/d1/8f0c45baa02145146e3faf459f9c67a732d7c931a4f6a56d755e7a14c796/nodejs_wheel_binaries-22.15.1.tar.gz", hash = "sha256:3825fb01887d2848904fbb62807e67d75dbe13f8fce3f0dd5a1d127b3afb854b", size = 8055, upload-time = "2025-05-15T06:23:00.568Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/77/d7/710a72f30a05657be46594073245a234f416d6a4ff85a67279bcf5a3d82a/nodejs_wheel_binaries-22.15.1-py2.py3-none-macosx_11_0_arm64.whl", hash = "sha256:e153dbeed992f31da8b3013e7e3ae62d066d4b9e129d67e745858403ffc47d41", size = 50515109, upload-time = "2025-05-15T06:22:27.49Z" },
+    { url = "https://files.pythonhosted.org/packages/dc/08/8da3bbd985ee70177d1972d457a87f3e137a85cc355f4c87a6a2a102c0af/nodejs_wheel_binaries-22.15.1-py2.py3-none-macosx_11_0_x86_64.whl", hash = "sha256:712d9533c0978b16d3e27e388cac2f9b9f8b92f713d63f59698a65c2f121d0aa", size = 51410162, upload-time = "2025-05-15T06:22:32.053Z" },
+    { url = "https://files.pythonhosted.org/packages/45/46/3c3e43eaef408546d3a724d6b71b5d240c64aedb7b1e2d3887a8478214c6/nodejs_wheel_binaries-22.15.1-py2.py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:3cc62b389cd32984f6e9c171dd4c5c5d761a95d405adfb335699ad505545485d", size = 57363736, upload-time = "2025-05-15T06:22:36.058Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/65/907a688edd67fcbd2c9e28c187fc9b2dc63e5e05bf66d55536e8eb9514f2/nodejs_wheel_binaries-22.15.1-py2.py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:8bac50293aadcddf54854255acd732e6a5ea3f1b091388cc785bb02ec62fa12b", size = 57890260, upload-time = "2025-05-15T06:22:40.861Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/66/57f7b673c37f1210e6a29d512b2c7bd10af8575819733f76b6bfbcbaa15a/nodejs_wheel_binaries-22.15.1-py2.py3-none-musllinux_1_2_aarch64.whl", hash = "sha256:611638320ee22fc59f67bc402ed673a700287e574ecbdb74c27aa83c15885f27", size = 59191978, upload-time = "2025-05-15T06:22:44.801Z" },
+    { url = "https://files.pythonhosted.org/packages/46/05/5c33f3d55c830ca8f724dd8235121e848adc0f86de45d860f81ad1d64fb5/nodejs_wheel_binaries-22.15.1-py2.py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:6157e621d41e7f717b1ca3c31c251f0b8e2aa710f93bf6479268fead1dce5ef0", size = 60220671, upload-time = "2025-05-15T06:22:49.118Z" },
+    { url = "https://files.pythonhosted.org/packages/95/58/d7c6cd9943f07a172cbadb36f4ae4f73afc9fa023d5ea7a9f08b8b9fea2a/nodejs_wheel_binaries-22.15.1-py2.py3-none-win_amd64.whl", hash = "sha256:bc1e1717eaff84d3cdbec2de71a505b3d6d7750b874f8d292e18f215dc5d7f7e", size = 40718644, upload-time = "2025-05-15T06:22:53.456Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/36/aaa72ba94dd7f7a02d556ceec26b98528c41259f77f44d41152d93bec93c/nodejs_wheel_binaries-22.15.1-py2.py3-none-win_arm64.whl", hash = "sha256:d1509e90c2bc593d6f43dd917fb91eec0b3ea690884028002d4798e7811fdff4", size = 36436180, upload-time = "2025-05-15T06:22:56.589Z" },
 ]
 
 [[package]]
@@ -1078,6 +1112,23 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/fb/68/ce067f09fca4abeca8771fe667d89cc347d1e99da3e093112ac329c6020e/pyjwt-2.9.0.tar.gz", hash = "sha256:7e1e5b56cc735432a7369cbfa0efe50fa113ebecdc04ae6922deba8b84582d0c", size = 78825, upload-time = "2024-08-01T15:01:08.445Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/79/84/0fdf9b18ba31d69877bd39c9cd6052b47f3761e9910c15de788e519f079f/PyJWT-2.9.0-py3-none-any.whl", hash = "sha256:3b02fb0f44517787776cf48f2ae25d8e14f300e6d7545a4315cee571a415e850", size = 22344, upload-time = "2024-08-01T15:01:06.481Z" },
+]
+
+[[package]]
+name = "pylimbo"
+version = "0.0.20"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5c/f0/3788461c6cdbd70c895a8b21a2033bbe7dfe81b17472379caacec3c9bbb0/pylimbo-0.0.20.tar.gz", hash = "sha256:05fe7bfe54000f7436efda65c2fbb36dfb29fa99353aae04ff6301584801ca36", size = 580578, upload-time = "2025-05-14T07:04:00.432Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a3/52/f84183a0bdcdd6b9639f5a0575e63d36b141ba9c61baf0892c8bb73caa62/pylimbo-0.0.20-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:17b0ac9cc1943a3fa2cbf3d493e5dafd31240512f3d773298705eb42f7528ceb", size = 1723063, upload-time = "2025-05-14T07:03:44.484Z" },
+    { url = "https://files.pythonhosted.org/packages/88/be/0bdead8318cd4fa8049407533495e228d4ef56e45ab50aaf9e81237426ae/pylimbo-0.0.20-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:529b9551d8ea27181ed2fa6029bc6f9a288c2fa990b69bdb5fb7c838eeecd96e", size = 1599972, upload-time = "2025-05-14T07:03:46.077Z" },
+    { url = "https://files.pythonhosted.org/packages/23/5d/97c1dce9f1c8242396855d3c6df236e24cc89bb376723523ab03abe04397/pylimbo-0.0.20-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e5084ccc884be5af9de252de17826be18c7eb21572157e2548ad2c6e21e2804a", size = 4946510, upload-time = "2025-05-14T07:03:47.442Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/11/33b5f30163bf28096a450884397ffe8c584ab1f8afefa38ed5d1ed0b77b4/pylimbo-0.0.20-cp313-cp313-macosx_10_12_x86_64.whl", hash = "sha256:16745d533cda5e23111e03ece4461639110eec6c50a5e1f2dcbdaf2274d9f384", size = 1723065, upload-time = "2025-05-14T07:03:49.991Z" },
+    { url = "https://files.pythonhosted.org/packages/58/5a/367e0a886d5c1d8ba467b72047b998ba7fab92281098b6c95544f6cdb9d9/pylimbo-0.0.20-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:bc464e3875a68e2848558b1c4ebc677a41572a5f2f5b8c9c61a8b49fa1af9e8f", size = 1599973, upload-time = "2025-05-14T07:03:51.46Z" },
+    { url = "https://files.pythonhosted.org/packages/2c/ca/2d197d99bae596e9443514a55c75997de2abe938945a8dfc03157f1c34b7/pylimbo-0.0.20-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:dfad28276d2c71c26cbe9e4350ac6d4b64425167b5fd2814679e665c11811e44", size = 4946511, upload-time = "2025-05-14T07:03:53.001Z" },
 ]
 
 [[package]]

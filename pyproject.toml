@@ -19,6 +19,7 @@ dependencies = [
     "pandas[excel,performance]>=2.2.3",
     "phonenumbers>=8.13.55",
     "pyarrow>=19.0.0",
+    "pylimbo>=0.0.20",
     "python-dotenv>=1.1.0",
     "python-multipart>=0.0.20",
     "sentry-sdk[celery,fastapi]>=2.27.0",
@@ -27,7 +28,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["ruff>=0.11.8"]
+dev = ["basedpyright>=1.29.1", "ruff>=0.11.8"]
 
 [build-system]
 requires = ["hatchling"]
