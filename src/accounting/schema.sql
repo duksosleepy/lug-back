@@ -230,3 +230,59 @@ CREATE INDEX IF NOT EXISTS idx_accounts_parent         ON accounts(parent_code);
 CREATE INDEX IF NOT EXISTS idx_departments_parent      ON departments(parent_code);
 CREATE INDEX IF NOT EXISTS idx_pos_department          ON pos_machines(department_code);
 CREATE INDEX IF NOT EXISTS idx_statements_dates        ON bank_statements(account_number, start_date, end_date);
+
+-- Additional Vietnamese transaction rules for bank statement processing
+
+-- POS transactions (highest priority)
+INSERT INTO transaction_rules (pattern, document_type, debit_account, credit_account, counterparty_code, department_code, cost_code, description_template, is_credit, priority) VALUES
+('TT\s*POS\s*(\d{7,8})', 'BC', '1121', '1311', 'KL', NULL, NULL, 'Thu tiền bán hàng khách lẻ (POS {pos_code})', 1, 90);
+
+-- ATM withdrawals
+INSERT INTO transaction_rules (pattern, document_type, debit_account, credit_account, counterparty_code, department_code, cost_code, description_template, is_credit, priority) VALUES
+('ATM.*R[uú]t\s*ti[eề]n|RUT\s*TIEN.*ATM', 'BN', '1111', '1121', NULL, NULL, 'RUTIEN', 'Rút tiền mặt tại ATM', 0, 80);
+
+-- Bank transfers IN (credit)
+INSERT INTO transaction_rules (pattern, document_type, debit_account, credit_account, counterparty_code, department_code, cost_code, description_template, is_credit, priority) VALUES
+('CK\s*den|CHUYEN\s*KHOAN\s*DEN|TT.*CK.*DEN', 'BC', '1121', '1311', NULL, NULL, NULL, 'Thu tiền chuyển khoản', 1, 70);
+
+-- Bank transfers OUT (debit)
+INSERT INTO transaction_rules (pattern, document_type, debit_account, credit_account, counterparty_code, department_code, cost_code, description_template, is_credit, priority) VALUES
+('CK\s*di|CHUYEN\s*KHOAN\s*DI|TT.*CK.*DI', 'BN', '1311', '1121', NULL, NULL, NULL, 'Chuyển khoản thanh toán', 0, 70);
+
+-- Internet banking transactions
+INSERT INTO transaction_rules (pattern, document_type, debit_account, credit_account, counterparty_code, department_code, cost_code, description_template, is_credit, priority) VALUES
+('IB|INTERNET\s*BANKING|BIDV\s*ONLINE', 'BN', '6278', '1121', NULL, NULL, 'DICHVU', 'Giao dịch Internet Banking', 0, 60);
+
+-- Bank fees
+INSERT INTO transaction_rules (pattern, document_type, debit_account, credit_account, counterparty_code, department_code, cost_code, description_template, is_credit, priority) VALUES
+('PH[IÍ].*[NG]H.*|PHI.*DICH.*VU|FEE', 'BN', '6278', '1121', 'BIDV', NULL, 'PHIDV', 'Phí dịch vụ ngân hàng', 0, 50);
+
+-- Interest income
+INSERT INTO transaction_rules (pattern, document_type, debit_account, credit_account, counterparty_code, department_code, cost_code, description_template, is_credit, priority) VALUES
+('L[AÃ]I.*SU[ẤẬ]T|LAI.*TIEN.*GUI|INTEREST', 'BC', '1121', '5154', 'BIDV', NULL, NULL, 'Lãi tiền gửi ngân hàng', 1, 60);
+
+-- Card payments
+INSERT INTO transaction_rules (pattern, document_type, debit_account, credit_account, counterparty_code, department_code, cost_code, description_template, is_credit, priority) VALUES
+('TH.*THE|THANH.*TOAN.*THE|CARD.*PAYMENT', 'BN', '6278', '1121', NULL, NULL, 'CARD', 'Thanh toán bằng thẻ', 0, 40);
+
+-- Salary payments
+INSERT INTO transaction_rules (pattern, document_type, debit_account, credit_account, counterparty_code, department_code, cost_code, description_template, is_credit, priority) VALUES
+('LUONG|SALARY|TRA.*LUONG', 'BN', '6411', '1121', 'NHANVIEN', 'NHANSU', 'LUONG', 'Trả lương nhân viên', 0, 30);
+
+-- Tax payments
+INSERT INTO transaction_rules (pattern, document_type, debit_account, credit_account, counterparty_code, department_code, cost_code, description_template, is_credit, priority) VALUES
+('THUE|TAX|NOP.*THUE', 'BN', '3331', '1121', 'CUCTHUE', NULL, 'THUE', 'Nộp thuế', 0, 30);
+
+-- Utility payments
+INSERT INTO transaction_rules (pattern, document_type, debit_account, credit_account, counterparty_code, department_code, cost_code, description_template, is_credit, priority) VALUES
+('[DĐ]I[EỆ]N|ELECTRIC', 'BN', '6278', '1121', 'EVNSPC', NULL, 'DIEN', 'Thanh toán tiền điện', 0, 20);
+
+INSERT INTO transaction_rules (pattern, document_type, debit_account, credit_account, counterparty_code, department_code, cost_code, description_template, is_credit, priority) VALUES
+('N[UƯ][OỚ]C|WATER', 'BN', '6278', '1121', 'CAPNUOC', NULL, 'NUOC', 'Thanh toán tiền nước', 0, 20);
+
+-- Default rules (lowest priority)
+INSERT INTO transaction_rules (pattern, document_type, debit_account, credit_account, counterparty_code, department_code, cost_code, description_template, is_credit, priority) VALUES
+('.*', 'BC', '1121', '1311', 'KL', NULL, NULL, 'Thu tiền khác', 1, 1);
+
+INSERT INTO transaction_rules (pattern, document_type, debit_account, credit_account, counterparty_code, department_code, cost_code, description_template, is_credit, priority) VALUES
+('.*', 'BN', '6278', '1121', NULL, NULL, 'KHAC', 'Chi tiền khác', 0, 1);
