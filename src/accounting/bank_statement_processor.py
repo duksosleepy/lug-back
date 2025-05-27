@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Union
 import limbo
 import pandas as pd
 
-from util.logging import get_logger
+from src.util.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -42,26 +42,26 @@ class RawTransaction:
 class SaokeEntry:
     """Structured accounting entry (saoke format)"""
 
-    document_type: str
-    date: str
-    document_number: str
-    currency: str
-    sequence: int
-    counterparty_code: str
-    counterparty_name: str
-    address: str
-    description: str
-    original_description: str
-    amount1: float
-    amount2: float
-    debit_account: str
-    credit_account: str
-    field1: float = 0
+    document_type: str  # BC/BN
+    date: str  # DD/MM/YYYY format
+    document_number: str  # e.g., BC03/001
+    currency: str  # VND
+    sequence: int  # 1
+    counterparty_code: str  # e.g., KL-GOBARIA1
+    counterparty_name: str  # e.g., Khách Lẻ Không Lấy Hóa Đơn
+    address: str  # Full address
+    description: str  # Processed description
+    original_description: str  # Original bank statement description
+    amount1: float  # Transaction amount
+    amount2: float  # Same as amount1
+    debit_account: str  # e.g., 1121114
+    credit_account: str  # e.g., 1311
+    field1: float = 0  # Reserved fields
     field2: float = 0
     field3: float = 0
     field4: float = 0
-    date2: str = ""
-    department: str = ""
+    date2: str = ""  # MM/DD/YYYY format
+    department: str = ""  # e.g., GO BRVT
 
 
 class BankStatementProcessor:
@@ -302,15 +302,28 @@ class BankStatementProcessor:
 
         # Extract POS code if present
         pos_code = self.extract_pos_code(transaction.description)
+
+        # Extract suffix from description (e.g., "5777_1" from the transaction)
+        suffix_match = re.search(r"(\d{4}_\d+)", transaction.description)
+        suffix = suffix_match.group(1) if suffix_match else ""
+
         if pos_code and pos_code in self.pos_machines:
             pos_info = self.pos_machines[pos_code]
-            enriched["department_name"] = self.departments.get(
-                pos_info["department_code"], ""
-            )
+
+            # Get department info
+            dept_code = pos_info["department_code"]
+            if dept_code and dept_code in self.departments:
+                enriched["department_name"] = self.departments[dept_code]
+
+            # Get POS address
+            enriched["address"] = pos_info.get("address", "")
+
+            # Update description with POS info and suffix
             if match.description_template:
-                enriched["description"] = match.description_template.replace(
-                    "{pos_code}", pos_code
-                )
+                desc = match.description_template
+                desc = desc.replace("{pos_code}", pos_code)
+                desc = desc.replace("{suffix}", suffix)
+                enriched["description"] = desc
 
         # Get counterparty info
         if (
@@ -319,19 +332,23 @@ class BankStatementProcessor:
         ):
             cp_info = self.counterparties[match.counterparty_code]
             enriched["counterparty_name"] = cp_info["name"]
-            enriched["address"] = cp_info["address"]
+            # Only override address if not already set from POS
+            if not enriched["address"]:
+                enriched["address"] = cp_info["address"]
 
-        # Get department name
-        if match.department_code and match.department_code in self.departments:
-            enriched["department_name"] = self.departments[
-                match.department_code
-            ]
+        # Get department name if not already set
+        if not enriched["department_name"] and match.department_code:
+            if match.department_code in self.departments:
+                enriched["department_name"] = self.departments[
+                    match.department_code
+                ]
 
         return enriched
 
     def generate_document_number(self, doc_type: str, date: datetime) -> str:
         """Generate sequential document number"""
         self.doc_counters[doc_type] += 1
+        # Format: BC03/001 (TypeMonth/Counter)
         month_str = f"{date.month:02d}"
         counter_str = f"{self.doc_counters[doc_type]:03d}"
         return f"{doc_type}{month_str}/{counter_str}"
