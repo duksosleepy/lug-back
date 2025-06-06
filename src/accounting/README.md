@@ -1,135 +1,75 @@
-# Bank Statement to Saoke Converter
+# Bank Statement Converter Module
 
-This module converts BIDV bank statements to the standardized Saoke accounting format.
+This module provides functionality to convert BIDV bank statements to the saoke format required for accounting systems.
 
-## Overview
+## Features
 
-The system processes bank transactions by:
-1. **Extracting information from descriptions** - POS codes, departments, counterparties
-2. **Mapping to database entries** - Using reference data to enrich transactions
-3. **Generating proper accounting entries** - In the required Saoke format
+- Processes BIDV bank statements (Excel/ODS files) and converts them to the standard saoke format
+- Extracts transaction details including dates, amounts, descriptions, and counterparties
+- Determines appropriate account codes (debit/credit) based on transaction patterns
+- Formats output with all required fields according to accounting specifications
+- Provides both API endpoints and command-line utilities for processing
 
-## Key Features
+## API Endpoints
 
-- **Dynamic account assignment** - Accounts are determined based on transaction patterns
-- **POS machine mapping** - Each POS machine maps to specific departments and counterparties
-- **Flexible description parsing** - Extracts suffixes and formats descriptions correctly
-- **Database-driven enrichment** - All reference data stored in SQLite database
+- `/accounting/process/online` - Process bank statements with online mode
+- `/accounting/process/offline` - Process bank statements with offline mode
 
-## Setup Instructions
+Both endpoints accept an uploaded Excel/ODS file and return a JSON response with:
+- `success`: Whether the processing was successful
+- `message`: Status message
+- `result_file`: Base64-encoded Excel file with the processed data
+- `filename`: Suggested filename for the processed file
 
-### 1. Initialize the Database
+## Usage
 
-```bash
-cd /home/khoi/code/lug-back/src/accounting
-python initialize_enhanced_db.py
-```
+### API Usage
 
-This creates and populates:
-- Account codes (including specific bank accounts like 1121114)
-- Departments (GO BRVT, GO HÀ NỘI, etc.)
-- Counterparties (KL-GOBARIA1, etc.)
-- POS machine mappings
-- Account mapping rules
-
-### 2. Test the Setup
-
-```bash
-python run_setup.py
-```
-
-This will:
-- Initialize the database
-- Test with a sample transaction
-- Process your BIDV file if present
-
-### 3. Process Bank Statements
-
-```bash
-python bank_statement_processor.py
-```
-
-## How It Works
-
-### Transaction Processing Flow
-
-1. **Read Bank Statement** → Detects BIDV format automatically
-2. **Extract Information** → POS code, amounts, dates from description
-3. **Match Rules** → Find appropriate processing rule
-4. **Enrich Data** → Look up department, counterparty, accounts
-5. **Generate Entry** → Create Saoke-formatted record
-
-### Example Transformation
-
-**Input (BIDV Statement):**
-```
-Reference: 0001NFS4-7YJO3BV08
-Date: 01/03/2025 11:17:53
-Debit: 0
-Credit: 888,000
-Balance: 112,028,712
-Description: TT POS 14100333 500379 5777 064217PDO
-```
-
-**Output (Saoke Format):**
-```
-Document Type: BC
-Date: 01/3/2025
-Document Number: BC03/001
-Currency: VND
-Sequence: 1
-Counterparty Code: KL-GOBARIA1
-Counterparty Name: Khách Lẻ Không Lấy Hóa Đơn
-Address: QH 1S9+10 TTTM Go BR-VT, Số 2A, Nguyễn Đình Chiểu, KP 1, P.Phước Hiệp, TP.Bà Rịa, T.Bà Rịa-Vũng Tàu
-Description: Thu tiền bán hàng khách lẻ (POS 14100333 - GO BRVT)_5777_1
-Original Description: TT POS 14100333 500379 5777 064217PDO
-Amount1: 888,000
-Amount2: 888,000
-Debit Account: 1121114
-Credit Account: 1311
-Date2: 3/1/2025
-Department: GO BRVT
-```
-
-## Key Mappings
-
-### POS Machines → Counterparties
-- POS 14100333 → KL-GOBARIA1 (GO Bà Rịa Vũng Tàu)
-- POS 14100334 → KL-GOHANOI1 (GO Hà Nội)
-- POS 14100335 → KL-GOHCM1 (GO Hồ Chí Minh)
-
-### Transaction Types → Accounts
-- Credit (BC): 1121114 (Bank) → 1311 (Receivable)
-- Debit (BN): Various expense accounts → 1121114 (Bank)
-
-### Description Patterns
-- Extracts POS code: "POS 14100333" → 14100333
-- Extracts suffix: "5777 064217PDO" → "_5777_1"
-- Formats: "Thu tiền bán hàng khách lẻ (POS {code} - {dept}){suffix}"
-
-## Adding New Mappings
-
-To add new POS machines or counterparties:
-
-1. Edit `initialize_enhanced_db.py`
-2. Add entries to the appropriate sections
-3. Re-run the initialization script
-
-## Troubleshooting
-
-- **No matches found**: Check transaction_rules table
-- **Wrong accounts**: Check account_mappings table
-- **Missing counterparty**: Add to counterparties table
-- **Wrong department**: Check pos_machines mapping
-
-## File Structure
+Send a POST request with the bank statement file to either endpoint:
 
 ```
-src/accounting/
-├── bank_statement_processor.py   # Main processor
-├── bank_statement_reader.py      # BIDV format reader
-├── initialize_enhanced_db.py     # Database setup
-├── run_setup.py                  # Complete setup script
-├── schema.sql                    # Database schema
-└── banking_enterprise.db         # SQLite database
+POST /accounting/process/online
+Content-Type: multipart/form-data
+file: [BIDV bank statement file]
 ```
+
+### Command Line Usage
+
+You can also use the module from the command line:
+
+```
+python bank_statement_converter.py input_file.xlsx [output_file.xlsx]
+```
+
+## Required Output Format
+
+The output file follows a specific format with these fields:
+
+- Ma_Ct: Transaction type (BN, BC, etc.)
+- Ngay_Ct: Transaction date (equal to "ngày hiệu lực" in input file)
+- So_Ct: Document number
+- Ma_Tte: "VND"
+- Ty_Gia: 1
+- Ma_Dt: Counterparty code
+- Ong_Ba: Counterparty name
+- Dia_Chi: Counterparty address
+- Dien_Giai: Transaction description
+- Tien: Amount
+- Tien_Nt: Amount (same as Tien)
+- Tk_No: Debit account
+- Tk_Co: Credit account
+
+Plus additional required fields (may be empty or have default values):
+Ma_Thue, Thue_GtGt, Tien3, Tien_Nt3, Tk_No3, Tk_Co3, Han_Tt, Ngay_Ct0,
+So_Ct0, So_Seri0, Ten_Vt, Ma_So_Thue, Ten_DtGtGt, Ma_Tc, Ma_Bp, Ma_Km,
+Ma_Hd, Ma_Sp, Ma_Job, DUYET
+
+## Testing
+
+You can test the module by running:
+
+```
+python test_accounting_processor.py
+```
+
+This will process a sample file and display the results.

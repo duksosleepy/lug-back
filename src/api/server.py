@@ -4,6 +4,7 @@ import io
 import json
 import os
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -15,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from sapo_sync import SapoSyncRequest, sync_mysapo, sync_mysapogo
 from settings import app_settings
+from src.accounting.api import router as accounting_router
 from util import format_phone_number, validate_excel_file
 from util.logging import setup_logging
 from util.logging.middleware import setup_fastapi_logging
@@ -41,6 +43,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include the accounting router
+app.include_router(accounting_router)
 
 ALLOWED_EXTENSIONS = app_settings.allowed_extensions
 ERROR_NOTIFICATION_EMAILS = app_settings.error_notification_emails
@@ -839,481 +844,6 @@ async def submit_warranty(request: WarrantyRequest):
         }
 
 
-# ============================================================================
-# NEW BANK STATEMENT PROCESSING ENDPOINTS
-# ============================================================================
-
-
-@app.post("/process/bank-statement")
-async def process_bank_statement(file: UploadFile = File(...)):
-    """
-    Process single bank statement file and return Excel stream
-    Similar to /process/online and /process/offline
-    """
-    try:
-        # Validate file
-        validate_excel_file(file.filename, {".ods", ".xlsx", ".xls"})
-
-        # Read file content
-        content = await file.read()
-        input_buffer = io.BytesIO(content)
-
-        logger.info(f"Processing bank statement: {file.filename}")
-
-        # Process the file
-        result = await _process_bank_statement_stream(input_buffer)
-
-        if not result["success"]:
-            raise HTTPException(status_code=500, detail=result["error"])
-
-        # Return Excel stream
-        output_filename = f"saoke_{file.filename.split('.')[0]}.xlsx"
-
-        return StreamingResponse(
-            io.BytesIO(result["excel_data"]),
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={
-                "Content-Disposition": f"attachment; filename={output_filename}"
-            },
-        )
-
-    except Exception as e:
-        logger.error(
-            f"Error processing bank statement: {str(e)}", exc_info=True
-        )
-        raise HTTPException(
-            status_code=500, detail=f"Processing error: {str(e)}"
-        )
-
-
-@app.post("/process/bank-statement-multiple")
-async def process_multiple_bank_statements(
-    files: List[UploadFile] = File(...), strategy: str = Form("smart")
-):
-    """
-    Process multiple bank statement files and return ZIP with Excel files
-    """
-    try:
-        if len(files) > 20:  # Reasonable limit
-            raise HTTPException(
-                status_code=400, detail="Maximum 20 files allowed"
-            )
-
-        # Validate all files
-        for file in files:
-            validate_excel_file(file.filename, {".ods", ".xlsx", ".xls"})
-
-        logger.info(f"Processing {len(files)} bank statement files")
-
-        # Process all files
-        processed_files = []
-        failed_files = []
-
-        for file in files:
-            try:
-                content = await file.read()
-                input_buffer = io.BytesIO(content)
-
-                result = await _process_bank_statement_stream(input_buffer)
-
-                if result["success"]:
-                    processed_files.append(
-                        {
-                            "filename": f"saoke_{file.filename.split('.')[0]}.xlsx",
-                            "data": result["excel_data"],
-                            "transactions": result["transactions"],
-                        }
-                    )
-                else:
-                    failed_files.append(
-                        {"filename": file.filename, "error": result["error"]}
-                    )
-
-            except Exception as e:
-                failed_files.append(
-                    {"filename": file.filename, "error": str(e)}
-                )
-
-        if not processed_files:
-            raise HTTPException(
-                status_code=500, detail="No files were processed successfully"
-            )
-
-        # Create ZIP with all Excel files
-        zip_buffer = io.BytesIO()
-
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-            # Add processed Excel files
-            for pf in processed_files:
-                zip_file.writestr(pf["filename"], pf["data"])
-
-            # Add summary report if there were failures
-            if failed_files or len(processed_files) > 1:
-                summary_data = []
-                for pf in processed_files:
-                    summary_data.append(
-                        {
-                            "File": pf["filename"],
-                            "Status": "Success",
-                            "Transactions": pf["transactions"],
-                            "Error": "",
-                        }
-                    )
-
-                for ff in failed_files:
-                    summary_data.append(
-                        {
-                            "File": ff["filename"],
-                            "Status": "Failed",
-                            "Transactions": 0,
-                            "Error": ff["error"],
-                        }
-                    )
-
-                summary_df = pd.DataFrame(summary_data)
-                summary_buffer = io.BytesIO()
-                summary_df.to_excel(summary_buffer, index=False)
-                zip_file.writestr(
-                    "processing_summary.xlsx", summary_buffer.getvalue()
-                )
-
-        zip_buffer.seek(0)
-
-        return StreamingResponse(
-            io.BytesIO(zip_buffer.getvalue()),
-            media_type="application/zip",
-            headers={
-                "Content-Disposition": "attachment; filename=bank_statements_processed.zip"
-            },
-        )
-
-    except Exception as e:
-        logger.error(
-            f"Error processing multiple files: {str(e)}", exc_info=True
-        )
-        raise HTTPException(
-            status_code=500, detail=f"Processing error: {str(e)}"
-        )
-
-
-@app.post("/process/bank-statement-async")
-async def process_bank_statement_async(
-    background_tasks: BackgroundTasks, file: UploadFile = File(...)
-):
-    """
-    Start async processing and return status endpoint for polling
-    """
-    try:
-        # Validate file
-        validate_excel_file(file.filename, {".ods", ".xlsx", ".xls"})
-
-        # Save file temporarily
-        with tempfile.NamedTemporaryFile(
-            delete=False, suffix=".ods"
-        ) as tmp_file:
-            content = await file.read()
-            tmp_file.write(content)
-            tmp_file_path = tmp_file.name
-
-        # Create session ID
-        session_id = f"stmt_{uuid.uuid4().hex[:8]}"
-
-        # Start background processing
-        background_tasks.add_task(
-            _process_bank_statement_background,
-            session_id,
-            tmp_file_path,
-            file.filename,
-        )
-
-        return ProcessingResult(
-            success=True, message="Processing started", statement_id=session_id
-        )
-
-    except Exception as e:
-        logger.error(f"Error starting async processing: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/process/bank-statement-status/{session_id}")
-async def get_bank_statement_status(session_id: str):
-    """
-    Get processing status for async processing
-    """
-    try:
-        # Check Redis for status
-        status_key = f"bank_statement:{session_id}:status"
-        status_data = bank_processor.processor.redis_cache.redis_client.hgetall(
-            status_key
-        )
-
-        if not status_data:
-            raise HTTPException(status_code=404, detail="Session not found")
-
-        return ProcessingStatusResponse(
-            success=True,
-            message=status_data.get("message", ""),
-            statement_id=session_id,
-            total_transactions=int(status_data.get("total_transactions", 0)),
-            processed_transactions=int(
-                status_data.get("processed_transactions", 0)
-            ),
-            processing_time=float(status_data.get("processing_time", 0))
-            if status_data.get("processing_time")
-            else None,
-        )
-
-    except Exception as e:
-        logger.error(f"Error getting status: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/process/bank-statement-download/{session_id}")
-async def download_bank_statement_result(session_id: str):
-    """
-    Download processed result for async processing
-    """
-    try:
-        # Check if result exists
-        result_key = f"bank_statement:{session_id}:result"
-        result_data = bank_processor.processor.redis_cache.redis_client.get(
-            result_key
-        )
-
-        if not result_data:
-            raise HTTPException(
-                status_code=404, detail="Result not found or expired"
-            )
-
-        import base64
-
-        excel_data = base64.b64decode(result_data)
-
-        # Get original filename
-        meta_key = f"bank_statement:{session_id}:meta"
-        meta_data = bank_processor.processor.redis_cache.redis_client.hgetall(
-            meta_key
-        )
-        original_filename = meta_data.get("filename", "statement")
-
-        output_filename = f"saoke_{original_filename.split('.')[0]}.xlsx"
-
-        return StreamingResponse(
-            io.BytesIO(excel_data),
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={
-                "Content-Disposition": f"attachment; filename={output_filename}"
-            },
-        )
-
-    except Exception as e:
-        logger.error(f"Error downloading result: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.delete("/process/bank-statement-cleanup/{session_id}")
-async def cleanup_bank_statement_session(session_id: str):
-    """
-    Cleanup processing session data
-    """
-    try:
-        # Clean up Redis keys
-        keys_to_delete = [
-            f"bank_statement:{session_id}:status",
-            f"bank_statement:{session_id}:result",
-            f"bank_statement:{session_id}:meta",
-        ]
-
-        bank_processor.processor.redis_cache.redis_client.delete(
-            *keys_to_delete
-        )
-
-        return {"message": f"Session {session_id} cleaned up successfully"}
-
-    except Exception as e:
-        logger.error(f"Error cleaning up session: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
-
-
-async def _process_bank_statement_stream(input_buffer: io.BytesIO) -> dict:
-    """
-    Process bank statement and return Excel data as bytes
-    """
-    start_time = time.time()
-
-    try:
-        # Process using the enhanced reader
-        reader = BankStatementReader()
-        df = reader.read_bank_statement(input_buffer, debug=False)
-
-        if df.empty:
-            return {
-                "success": False,
-                "error": "No transaction data found in bank statement",
-            }
-
-        # Convert to processed format (simplified)
-        processed_data = []
-        for _, row in df.iterrows():
-            # Apply basic processing rules
-            is_credit = row.get("credit", 0) > 0
-            amount = row.get("credit", 0) if is_credit else row.get("debit", 0)
-
-            processed_transaction = {
-                "document_type": "BC" if is_credit else "BN",
-                "date": row.get("date", "").strftime("%d/%m/%Y")
-                if pd.notna(row.get("date"))
-                else "",
-                "description": str(row.get("description", "")),
-                "amount": amount,
-                "debit_account": "1121" if is_credit else "6278",
-                "credit_account": "1311" if is_credit else "1121",
-                "reference": str(row.get("reference", "")),
-                "balance": row.get("balance", 0),
-            }
-            processed_data.append(processed_transaction)
-
-        # Create Excel output
-        output_df = pd.DataFrame(processed_data)
-
-        # Generate Excel in memory
-        excel_buffer = io.BytesIO()
-        with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-            output_df.to_excel(writer, sheet_name="Saoke", index=False)
-
-            # Add summary sheet
-            summary_data = {
-                "Metric": [
-                    "Total Transactions",
-                    "Total Credit",
-                    "Total Debit",
-                    "Processing Time",
-                ],
-                "Value": [
-                    len(output_df),
-                    output_df[output_df["document_type"] == "BC"][
-                        "amount"
-                    ].sum(),
-                    output_df[output_df["document_type"] == "BN"][
-                        "amount"
-                    ].sum(),
-                    f"{time.time() - start_time:.2f}s",
-                ],
-            }
-            pd.DataFrame(summary_data).to_excel(
-                writer, sheet_name="Summary", index=False
-            )
-
-        excel_buffer.seek(0)
-
-        return {
-            "success": True,
-            "excel_data": excel_buffer.getvalue(),
-            "transactions": len(processed_data),
-            "processing_time": time.time() - start_time,
-        }
-
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-async def _process_bank_statement_background(
-    session_id: str, file_path: str, filename: str
-):
-    """
-    Background task to process bank statement
-    """
-    import base64
-
-    try:
-        # Update status to processing
-        status_key = f"bank_statement:{session_id}:status"
-        bank_processor.processor.redis_cache.redis_client.hset(
-            status_key,
-            mapping={
-                "message": "Processing",
-                "start_time": datetime.now().isoformat(),
-                "total_transactions": 0,
-                "processed_transactions": 0,
-            },
-        )
-
-        # Store metadata
-        meta_key = f"bank_statement:{session_id}:meta"
-        bank_processor.processor.redis_cache.redis_client.hset(
-            meta_key, mapping={"filename": filename}
-        )
-
-        # Process the file
-        with open(file_path, "rb") as f:
-            input_buffer = io.BytesIO(f.read())
-
-        result = await _process_bank_statement_stream(input_buffer)
-
-        if result["success"]:
-            # Store result in Redis (with expiry)
-            result_key = f"bank_statement:{session_id}:result"
-            excel_b64 = base64.b64encode(result["excel_data"]).decode("utf-8")
-            bank_processor.processor.redis_cache.redis_client.setex(
-                result_key,
-                3600,  # 1 hour expiry
-                excel_b64,
-            )
-
-            # Update final status
-            bank_processor.processor.redis_cache.redis_client.hset(
-                status_key,
-                mapping={
-                    "message": "Completed",
-                    "end_time": datetime.now().isoformat(),
-                    "total_transactions": result["transactions"],
-                    "processed_transactions": result["transactions"],
-                    "processing_time": result["processing_time"],
-                },
-            )
-
-            logger.info(f"✅ Background processing completed for {filename}")
-        else:
-            # Update error status
-            bank_processor.processor.redis_cache.redis_client.hset(
-                status_key,
-                mapping={
-                    "message": f"Failed: {result['error']}",
-                    "end_time": datetime.now().isoformat(),
-                },
-            )
-
-            logger.error(
-                f"❌ Background processing failed for {filename}: {result['error']}"
-            )
-
-        # Cleanup temporary file
-        if os.path.exists(file_path):
-            os.unlink(file_path)
-
-    except Exception as e:
-        # Update error status
-        bank_processor.processor.redis_cache.redis_client.hset(
-            status_key,
-            mapping={
-                "message": f"Error: {str(e)}",
-                "end_time": datetime.now().isoformat(),
-            },
-        )
-
-        logger.error(f"Background processing error: {str(e)}", exc_info=True)
-
-
-# ============================================================================
-# HEALTH CHECK AND INFO ENDPOINTS
-# ============================================================================
-
-
 @app.get("/")
 async def root():
     """
@@ -1327,9 +857,9 @@ async def root():
             "online_processing": "/process/online",
             "offline_processing": "/process/offline",
             "product_mapping": "/process/product-mapping",
-            "bank_statement": "/process/bank-statement",
-            "bank_statement_multiple": "/process/bank-statement-multiple",
-            "bank_statement_async": "/process/bank-statement-async",
+            "accounting": "/accounting",
+            "accounting_online": "/accounting/process/online",
+            "accounting_offline": "/accounting/process/offline",
         },
     }
 
@@ -1347,12 +877,27 @@ async def health_check():
         except Exception as e:
             redis_status = f"error: {str(e)}"
 
+        # Check accounting processor database connection
+        accounting_status = "ok"
+        try:
+            from src.accounting.api import processor
+
+            if processor.connect():
+                processor.close()
+            else:
+                accounting_status = (
+                    "error: could not connect to accounting database"
+                )
+        except Exception as e:
+            accounting_status = f"error: {str(e)}"
+
         return {
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
             "services": {
                 "redis": redis_status,
                 "database": "ok",  # Add database check if needed
+                "accounting": accounting_status,
             },
         }
     except Exception as e:

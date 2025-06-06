@@ -847,7 +847,7 @@ class ExcelDataImporter:
         success &= self.import_pos_machines(
             pos_machines_file, pos_machines_sheet, clear_existing
         )
-        success &= self.setup_default_transaction_rules(clear_existing)
+        # success &= self.setup_default_transaction_rules(clear_existing)
 
         self.close()
         logger.info("=== Import Summary ===")
@@ -868,7 +868,7 @@ class ExcelDataImporter:
 
 
 if __name__ == "__main__":
-    importer = ExcelDataImporter(db_path="banking_enterprise.db")
+    importer = ExcelDataImporter(db_path="test.db")
 
     # Option 1: Import with automatic sheet detection (will use first sheet if multiple)
     importer.import_all_data(clear_existing=True)

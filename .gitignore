@@ -21,3 +21,13 @@ wheels/
 /src/accounting/BIDV 3840.ods
 /src/accounting/BIDV 3840.xlsx
 /src/accounting/banking_enterprise.db
+/src/accounting/banking_enterprise.db-shm
+/src/accounting/banking_enterprise.db-wal
+/src/accounting/test.db
+/src/accounting/test.sql
+/src/accounting/db_import.log
+/src/accounting/BIDV 3840.xlsx
+/src/accounting/BIDV 3840.ods
+/src/accounting/saoke.ods
+/src/accounting/trace.log
+/src/accounting/test.db-wal

@@ -42,15 +42,6 @@ class BankStatementConfig:
     def __post_init__(self):
         if self.header_patterns is None:
             self.header_patterns = {
-                "date": [
-                    "ngày gd",
-                    "ngay gd",
-                    "ngày",
-                    "ngay",
-                    "date",
-                    "ngày giao dịch",
-                    "ngay giao dich",
-                ],
                 "reference": [
                     "số tham chiếu",
                     "so tham chieu",
@@ -61,15 +52,14 @@ class BankStatementConfig:
                     "số ct",
                     "so ct",
                 ],
-                "description": [
-                    "mô tả",
-                    "mo ta",
-                    "diễn giải",
-                    "dien giai",
-                    "nội dung",
-                    "noi dung",
-                    "description",
-                    "detail",
+                "date": [
+                    "ngày hl",
+                    "ngay hl",
+                    "ngày",
+                    "ngay",
+                    "date",
+                    "ngày hiệu lực",
+                    "ngay hieu luc",
                 ],
                 "debit": [
                     "ghi nợ",
@@ -92,14 +82,24 @@ class BankStatementConfig:
                     "thu",
                 ],
                 "balance": ["số dư", "so du", "balance", "tồn quỹ", "ton quy"],
+                "description": [
+                    "mô tả",
+                    "mo ta",
+                    "diễn giải",
+                    "dien giai",
+                    "nội dung",
+                    "noi dung",
+                    "description",
+                    "detail",
+                ],
             }
 
         if self.data_start_patterns is None:
             self.data_start_patterns = [
                 "STT",
                 "stt",
-                "Ngày GD",
-                "ngày gd",
+                "Ngày HL",
+                "ngày hl",
                 "Số tham chiếu",
                 "so tham chieu",
             ]
@@ -246,6 +246,27 @@ class BankStatementReader:
         search_rows = min(20, len(df))
 
         for row_idx in range(search_rows):
+            # Skip rows that don't have a reference column indicator
+            has_reference_indicator = False
+            for col_idx in range(len(df.columns)):
+                cell_value = df.iloc[row_idx, col_idx]
+                normalized_cell = self.normalize_text(str(cell_value))
+                reference_patterns = [
+                    "so tham chieu",
+                    "ma gd",
+                    "reference",
+                    "ref",
+                    "so ct",
+                ]
+                if any(
+                    pattern in normalized_cell for pattern in reference_patterns
+                ):
+                    has_reference_indicator = True
+                    break
+
+            if not has_reference_indicator:
+                continue
+
             row_score = 0
             current_mapping = {}
 
@@ -294,6 +315,49 @@ class BankStatementReader:
         """
         start_row = header_row + 1
         end_row = len(df)
+
+        # Skip rows that contain "**Số tham chiếu" or similar patterns
+        skip_patterns = [
+            "**số tham chiếu",
+            "**so tham chieu",
+            "**số ct",
+            "**số chứng từ",
+        ]
+
+        # Find the actual start of data by skipping invalid rows
+        for row_idx in range(
+            start_row, min(start_row + 10, len(df))
+        ):  # Check next 10 rows
+            should_skip = False
+            for col_idx in range(len(df.columns)):
+                cell_value = df.iloc[row_idx, col_idx]
+                if pd.notna(cell_value) and isinstance(cell_value, str):
+                    cell_lower = self.normalize_text(str(cell_value))
+                    if any(pattern in cell_lower for pattern in skip_patterns):
+                        should_skip = True
+                        self.logger.info(
+                            f"Skipping row {row_idx} with '**Số tham chiếu' pattern"
+                        )
+                        start_row = row_idx + 1  # Skip this row
+                        break
+            if not should_skip:
+                # If row has a date, it's likely a valid data row
+                has_date = False
+                for col_idx in range(len(df.columns)):
+                    cell_value = df.iloc[row_idx, col_idx]
+                    if pd.notna(cell_value):
+                        try:
+                            # Try to parse as date
+                            if isinstance(cell_value, str) and (
+                                "/" in cell_value or "-" in cell_value
+                            ):
+                                pd.to_datetime(cell_value, errors="raise")
+                                has_date = True
+                                break
+                        except:
+                            pass
+                if has_date:
+                    break  # Found a valid row with date
 
         # Look for data end patterns
         for row_idx in range(start_row, len(df)):
@@ -562,7 +626,7 @@ def test_bank_statement_reader():
         ["", "", "", "", "", ""],
         [
             "STT",
-            "Ngày GD",
+            "Ngày HL",
             "Số tham chiếu",
             "Mô tả",
             "Ghi nợ",
