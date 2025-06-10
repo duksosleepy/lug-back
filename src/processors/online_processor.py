@@ -99,8 +99,15 @@ class DaskExcelProcessor:
             "|".join(self.excluded_product_names), case=False, na=False
         )
         vpp_mask = df["Loại vật tư"].fillna("").str.upper() != "VPP"
+
+        tlo_mask = df["Mã Ctừ"].fillna("") != "TLO"
+
         return df[
-            customer_mask & product_code_mask & product_name_mask & vpp_mask
+            customer_mask
+            & product_code_mask
+            & product_name_mask
+            & vpp_mask
+            & tlo_mask
         ]
 
     def _split_rows_by_quantity(self, df: dd.DataFrame) -> dd.DataFrame:
