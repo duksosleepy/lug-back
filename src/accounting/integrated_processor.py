@@ -275,7 +275,6 @@ class IntegratedBankProcessor:
                 nrows=15,
                 engine="calamine",
             )
-
             # Look for account number pattern in the header rows
             # More specific pattern to match "Số tài khoản: 1410177655"
             account_patterns = [

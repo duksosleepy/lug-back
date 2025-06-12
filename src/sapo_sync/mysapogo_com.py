@@ -87,7 +87,39 @@ def create_lookup_tables():
         146761: "LUG",
     }
 
-    return order_sources_lookup, accounts_lookup
+    # Inline cancellation reasons data for "Lý do hủy đơn" lookup
+    cancel_reasons_lookup = {
+        14392891: "Chuyển Hoàn",
+        14392871: "Chuyển Hoàn",
+        13953110: "Đơn test",
+        13877599: "Khách báo hủy",
+        13876552: "Không liên lạc được",
+        13870940: "Cần gấp",
+        13870901: "Khách phá",
+        13870900: "Mua sàn khác",
+        13870899: "Gộp đơn",
+        2005802: "Lý do khác (Trả hàng)",
+        2005801: "Hàng hỏng",
+        2005800: "Hàng lỗi",
+        2005799: "Lý do khác (Fulfillment)",
+        2005798: "Đóng nhầm hàng",
+        2005797: "Bổ sung thêm hàng",
+        2005796: "Đổi đối tác vận chuyển",
+        2005795: "Lý do khác (Giao hàng)",
+        2005794: "Tăng phí Ship, khách hàng không nhận hàng",
+        2005793: "Khách hàng không nhận hàng",
+        2005792: "Không liên lạc được với khách hàng",
+        2005791: "Hủy giao hàng",
+        2005790: "Lý do khác",
+        2005789: "Nhân viên làm sai",
+        2005788: "Hết hàng",
+        2005787: "Đã mua hàng tại cửa hàng",
+        2005786: "Đơn trùng",
+        2005785: "Phí vận chuyển cao",
+        2005784: "Đặt nhầm sản phẩm",
+    }
+
+    return order_sources_lookup, accounts_lookup, cancel_reasons_lookup
 
 
 def extract_branch(detail_json):
@@ -133,7 +165,9 @@ async def fetch_and_process_orders(start_date, end_date):
         f"Bắt đầu đồng bộ mysapogo.com từ {adjusted_start_date} đến {adjusted_end_date}"
     )
 
-    order_sources_lookup, accounts_lookup = create_lookup_tables()
+    order_sources_lookup, accounts_lookup, cancel_reasons_lookup = (
+        create_lookup_tables()
+    )
     status_mapping = {
         "draft": "Đặt hàng",
         "finalized": "Đang giao dịch",
@@ -194,6 +228,7 @@ async def fetch_and_process_orders(start_date, end_date):
                 order_sources_lookup,
                 accounts_lookup,
                 status_mapping,
+                cancel_reasons_lookup,
             )
             all_processed_orders.extend(processed_orders)
             logger.info(
@@ -205,9 +240,21 @@ async def fetch_and_process_orders(start_date, end_date):
 
 
 def process_page_data(
-    order_data, order_sources_lookup, accounts_lookup, status_mapping
+    order_data,
+    order_sources_lookup,
+    accounts_lookup,
+    status_mapping,
+    cancel_reasons_lookup,
 ):
-    """Process a single page of order data."""
+    """Process a single page of order data.
+
+    Args:
+        order_data: Raw order data from API
+        order_sources_lookup: Dictionary mapping source IDs to names
+        accounts_lookup: Dictionary mapping account IDs to names
+        status_mapping: Dictionary mapping status codes to Vietnamese names
+        cancel_reasons_lookup: Dictionary mapping cancellation reason IDs to Vietnamese names
+    """
     result = []
     orders = order_data.get("orders", []) or []
 
@@ -276,7 +323,14 @@ def process_page_data(
                         else "",
                     ),
                     ("Số lượng", 0),
-                    ("Lý do hủy đơn", order.get("reason_cancel_id", "")),
+                    (
+                        "Lý do hủy đơn",
+                        # Convert cancellation reason ID to readable name, fallback to ID if not found
+                        cancel_reasons_lookup.get(
+                            order.get("reason_cancel_id"),
+                            order.get("reason_cancel_id", ""),
+                        ),
+                    ),
                     (
                         "Ngày hủy đơn",
                         convert_to_gmt7(order.get("cancelled_on", "")),
@@ -328,7 +382,14 @@ def process_page_data(
                             else "",
                         ),
                         ("Số lượng", line_item.get("quantity", 0)),
-                        ("Lý do hủy đơn", order.get("reason_cancel_id", "")),
+                        (
+                            "Lý do hủy đơn",
+                            # Convert cancellation reason ID to readable name, fallback to ID if not found
+                            cancel_reasons_lookup.get(
+                                order.get("reason_cancel_id"),
+                                order.get("reason_cancel_id", ""),
+                            ),
+                        ),
                         (
                             "Ngày hủy đơn",
                             convert_to_gmt7(order.get("cancelled_on", "")),

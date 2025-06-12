@@ -8,8 +8,7 @@ the output to the specified format with all required headers.
 """
 
 import io
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Optional, Union
 
 import pandas as pd
 from loguru import logger
@@ -79,6 +78,7 @@ class BankStatementConverter:
         except Exception as e:
             self.logger.error(f"Error converting bank statement: {e}")
             import traceback
+
             traceback.print_exc()
             raise
         finally:
@@ -108,12 +108,14 @@ class BankStatementConverter:
             saoke_df["Ma_Dt"] = df["counterparty_code"]  # Counterparty code
             saoke_df["Ong_Ba"] = df["counterparty_name"]  # Counterparty name
             saoke_df["Dia_Chi"] = df["address"]  # Counterparty address
-            saoke_df["Dien_Giai"] = df["description"]  # Description from processing
+            saoke_df["Dien_Giai"] = df[
+                "description"
+            ]  # Description from processing
             saoke_df["Tien"] = df["amount1"]  # Amount
             saoke_df["Tien_Nt"] = df["amount1"]  # Same as Tien
             saoke_df["Tk_No"] = df["debit_account"]  # Debit account
             saoke_df["Tk_Co"] = df["credit_account"]  # Credit account
-            
+
             # Add all other required fields with default values
             saoke_df["Ma_Thue"] = ""  # Empty
             saoke_df["Thue_GtGt"] = 0  # 0
@@ -129,19 +131,24 @@ class BankStatementConverter:
             saoke_df["Ma_So_Thue"] = ""  # Empty
             saoke_df["Ten_DtGtGt"] = ""  # Empty
             saoke_df["Ma_Tc"] = ""  # Empty
-            saoke_df["Ma_Bp"] = df.get("department", "")  # Department if available, otherwise empty
-            saoke_df["Ma_Km"] = df.get("cost_code", "")  # Cost code if available, otherwise empty
+            saoke_df["Ma_Bp"] = df.get(
+                "department", ""
+            )  # Department if available, otherwise empty
+            saoke_df["Ma_Km"] = df.get(
+                "cost_code", ""
+            )  # Cost code if available, otherwise empty
             saoke_df["Ma_Hd"] = ""  # Empty
             saoke_df["Ma_Sp"] = ""  # Empty
             saoke_df["Ma_Job"] = ""  # Empty
             saoke_df["DUYET"] = ""  # Empty
-            
+
             self.logger.info(f"Formatted {len(saoke_df)} rows to saoke format")
             return saoke_df
 
         except Exception as e:
             self.logger.error(f"Error formatting to saoke: {e}")
             import traceback
+
             traceback.print_exc()
             raise
 
@@ -149,11 +156,11 @@ class BankStatementConverter:
 def test_converter():
     """Test the bank statement converter"""
     import sys
-    
+
     if len(sys.argv) > 1:
         input_file = sys.argv[1]
         output_file = sys.argv[2] if len(sys.argv) > 2 else "saoke_output.xlsx"
-        
+
         converter = BankStatementConverter()
         try:
             df = converter.convert_to_saoke(input_file, output_file)
@@ -161,7 +168,9 @@ def test_converter():
         except Exception as e:
             print(f"Error: {e}")
     else:
-        print("Usage: python bank_statement_converter.py <input_file> [output_file]")
+        print(
+            "Usage: python bank_statement_converter.py <input_file> [output_file]"
+        )
 
 
 if __name__ == "__main__":

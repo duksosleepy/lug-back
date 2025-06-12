@@ -2,7 +2,14 @@ import os
 from pathlib import Path
 
 import pandas as pd
-from tantivy import Document, Index, SchemaBuilder, TextAnalyzerBuilder, Tokenizer, Filter
+from tantivy import (
+    Document,
+    Filter,
+    Index,
+    SchemaBuilder,
+    TextAnalyzerBuilder,
+    Tokenizer,
+)
 
 # Configure logging
 from src.util.logging import get_logger
@@ -45,7 +52,9 @@ def index_counterparties(file_path="danhmucdoituong.xls", sheet_name=None):
             "name", stored=True, tokenizer_name="vietnamese_normalized"
         )  # Ten_Dt
         contact_person_field = schema_builder.add_text_field(
-            "contact_person", stored=True, tokenizer_name="vietnamese_normalized"
+            "contact_person",
+            stored=True,
+            tokenizer_name="vietnamese_normalized",
         )  # Ong_Ba
         position_field = schema_builder.add_text_field(
             "position", stored=True
@@ -84,7 +93,7 @@ def index_counterparties(file_path="danhmucdoituong.xls", sheet_name=None):
 
         # Create an index with the schema
         index = Index(schema, path=str(index_path))
-        
+
         # Create custom analyzer with ASCII folding for Vietnamese text
         vietnamese_analyzer = (
             TextAnalyzerBuilder(Tokenizer.simple())
@@ -92,7 +101,7 @@ def index_counterparties(file_path="danhmucdoituong.xls", sheet_name=None):
             .filter(Filter.lowercase())
             .build()
         )
-        
+
         # Register the analyzer
         index.register_tokenizer("vietnamese_normalized", vietnamese_analyzer)
 
