@@ -1,6 +1,8 @@
 import json
 import re
 from collections import OrderedDict
+from datetime import datetime
+from typing import Dict, Optional
 
 import httpx
 
@@ -15,13 +17,218 @@ from util.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Cache for cancel reasons to avoid repeated API calls
+_cancel_reasons_cache = {
+    "data": None,
+    "timestamp": None,
+    "ttl_minutes": 60,  # Cache for 60 minutes
+}
+
 # Lấy cấu hình từ config_manager thay vì hardcode
 SPREADSHEET_ID = sapo_settings.spreadsheet_id
 RANGE_NAME = sapo_settings.data_range
 
 
-def create_lookup_tables():
-    "Create efficient lookup tables from inline static data instead of files."
+async def fetch_cancel_reasons() -> Optional[Dict[int, str]]:
+    """
+    Fetch cancel reasons from the API with caching mechanism.
+
+    Returns:
+        Dict[int, str]: Mapping of reason ID to reason name, or None if fetch fails
+    """
+    global _cancel_reasons_cache
+
+    # Check if cache is still valid
+    if (
+        _cancel_reasons_cache["data"] is not None
+        and _cancel_reasons_cache["timestamp"] is not None
+    ):
+        cache_age = datetime.now() - _cancel_reasons_cache["timestamp"]
+        if (
+            cache_age.total_seconds()
+            < _cancel_reasons_cache["ttl_minutes"] * 60
+        ):
+            logger.debug("Using cached cancel reasons")
+            return _cancel_reasons_cache["data"]
+
+    # Fetch fresh data from API
+    url = "https://congtysangtam.mysapogo.com/admin/reasons.json"
+    headers = sapo_settings.get_mysapogo_com_headers()
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+
+            reasons_data = response.json()
+            logger.info(f"Fetched {len(reasons_data)} cancel reasons from API")
+
+            # Convert to the expected format: {id: name}
+            cancel_reasons_lookup = {}
+
+            # Handle different possible response formats
+            if isinstance(reasons_data, list):
+                # If it's a list of reason objects
+                for reason in reasons_data:
+                    if isinstance(reason, dict) and "id" in reason:
+                        reason_id = reason.get("id")
+                        reason_name = (
+                            reason.get("name")
+                            or reason.get("title")
+                            or reason.get("description", "")
+                        )
+                        if reason_id is not None:
+                            cancel_reasons_lookup[int(reason_id)] = str(
+                                reason_name
+                            )
+            elif isinstance(reasons_data, dict):
+                # If it's a dict with 'reasons' key or direct id->name mapping
+                if "reasons" in reasons_data:
+                    reasons_list = reasons_data["reasons"]
+                    if isinstance(reasons_list, list):
+                        for reason in reasons_list:
+                            if isinstance(reason, dict) and "id" in reason:
+                                reason_id = reason.get("id")
+                                reason_name = (
+                                    reason.get("name")
+                                    or reason.get("title")
+                                    or reason.get("description", "")
+                                )
+                                if reason_id is not None:
+                                    cancel_reasons_lookup[int(reason_id)] = str(
+                                        reason_name
+                                    )
+                else:
+                    # Direct mapping format
+                    for key, value in reasons_data.items():
+                        try:
+                            cancel_reasons_lookup[int(key)] = str(value)
+                        except (ValueError, TypeError):
+                            logger.warning(
+                                f"Invalid reason format: {key} -> {value}"
+                            )
+
+            # Update cache
+            _cancel_reasons_cache["data"] = cancel_reasons_lookup
+            _cancel_reasons_cache["timestamp"] = datetime.now()
+
+            logger.info(
+                f"Successfully processed {len(cancel_reasons_lookup)} cancel reasons"
+            )
+            return cancel_reasons_lookup
+
+    except httpx.RequestError as e:
+        logger.error(f"Network error fetching cancel reasons: {e}")
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            f"HTTP error fetching cancel reasons: {e.response.status_code} - {e.response.text}"
+        )
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error for cancel reasons: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error fetching cancel reasons: {e}")
+
+    return None
+
+
+async def refresh_cancel_reasons_cache() -> Optional[Dict[int, str]]:
+    """
+    Force refresh the cancel reasons cache by bypassing the TTL check.
+
+    Returns:
+        Dict[int, str]: Fresh cancel reasons data, or None if fetch fails
+    """
+    global _cancel_reasons_cache
+
+    # Clear the cache to force a fresh fetch
+    _cancel_reasons_cache["data"] = None
+    _cancel_reasons_cache["timestamp"] = None
+
+    logger.info("Forcing refresh of cancel reasons cache")
+    return await fetch_cancel_reasons()
+
+
+def get_cancel_reasons_cache_info() -> Dict[str, any]:
+    """
+    Get information about the current cancel reasons cache status.
+
+    Returns:
+        Dict containing cache status information
+    """
+    global _cancel_reasons_cache
+
+    if _cancel_reasons_cache["timestamp"] is None:
+        return {
+            "cached": False,
+            "data_count": 0,
+            "cache_age_minutes": None,
+            "expires_in_minutes": None,
+        }
+
+    cache_age = datetime.now() - _cancel_reasons_cache["timestamp"]
+    cache_age_minutes = cache_age.total_seconds() / 60
+    expires_in_minutes = (
+        _cancel_reasons_cache["ttl_minutes"] - cache_age_minutes
+    )
+
+    return {
+        "cached": True,
+        "data_count": len(_cancel_reasons_cache["data"])
+        if _cancel_reasons_cache["data"]
+        else 0,
+        "cache_age_minutes": round(cache_age_minutes, 2),
+        "expires_in_minutes": round(max(0, expires_in_minutes), 2),
+        "is_expired": expires_in_minutes <= 0,
+    }
+
+
+def get_fallback_cancel_reasons() -> Dict[int, str]:
+    """
+    Get the hardcoded fallback cancel reasons lookup table.
+    This serves as a backup when the API is unavailable.
+
+    Returns:
+        Dict[int, str]: Mapping of cancellation reason ID to Vietnamese name
+    """
+    return {
+        14392891: "Chuyển Hoàn",
+        14392871: "Chuyển Hoàn",
+        13953110: "Đơn test",
+        13877599: "Khách báo hủy",
+        13876552: "Không liên lạc được",
+        13870940: "Cần gấp",
+        13870901: "Khách phá",
+        13870900: "Mua sàn khác",
+        13870899: "Gộp đơn",
+        2005802: "Lý do khác (Trả hàng)",
+        2005801: "Hàng hỏng",
+        2005800: "Hàng lỗi",
+        2005799: "Lý do khác (Fulfillment)",
+        2005798: "Đóng nhầm hàng",
+        2005797: "Bổ sung thêm hàng",
+        2005796: "Đổi đối tác vận chuyển",
+        2005795: "Lý do khác (Giao hàng)",
+        2005794: "Tăng phí Ship, khách hàng không nhận hàng",
+        2005793: "Khách hàng không nhận hàng",
+        2005792: "Không liên lạc được với khách hàng",
+        2005791: "Hủy giao hàng",
+        2005790: "Lý do khác",
+        2005789: "Nhân viên làm sai",
+        2005788: "Hết hàng",
+        2005787: "Đã mua hàng tại cửa hàng",
+        2005786: "Đơn trùng",
+        2005785: "Phí vận chuyển cao",
+        2005784: "Đặt nhầm sản phẩm",
+    }
+
+
+async def create_lookup_tables():
+    """
+    Create efficient lookup tables from static data and API calls.
+
+    Returns:
+        tuple: (order_sources_lookup, accounts_lookup, cancel_reasons_lookup)
+    """
     # Inline order sources data instead of loading from file
     order_sources_lookup = {
         8700401: "Recall",
@@ -87,37 +294,17 @@ def create_lookup_tables():
         146761: "LUG",
     }
 
-    # Inline cancellation reasons data for "Lý do hủy đơn" lookup
-    cancel_reasons_lookup = {
-        14392891: "Chuyển Hoàn",
-        14392871: "Chuyển Hoàn",
-        13953110: "Đơn test",
-        13877599: "Khách báo hủy",
-        13876552: "Không liên lạc được",
-        13870940: "Cần gấp",
-        13870901: "Khách phá",
-        13870900: "Mua sàn khác",
-        13870899: "Gộp đơn",
-        2005802: "Lý do khác (Trả hàng)",
-        2005801: "Hàng hỏng",
-        2005800: "Hàng lỗi",
-        2005799: "Lý do khác (Fulfillment)",
-        2005798: "Đóng nhầm hàng",
-        2005797: "Bổ sung thêm hàng",
-        2005796: "Đổi đối tác vận chuyển",
-        2005795: "Lý do khác (Giao hàng)",
-        2005794: "Tăng phí Ship, khách hàng không nhận hàng",
-        2005793: "Khách hàng không nhận hàng",
-        2005792: "Không liên lạc được với khách hàng",
-        2005791: "Hủy giao hàng",
-        2005790: "Lý do khác",
-        2005789: "Nhân viên làm sai",
-        2005788: "Hết hàng",
-        2005787: "Đã mua hàng tại cửa hàng",
-        2005786: "Đơn trùng",
-        2005785: "Phí vận chuyển cao",
-        2005784: "Đặt nhầm sản phẩm",
-    }
+    # Try to fetch cancel reasons from API, fallback to hardcoded values
+    cancel_reasons_lookup = await fetch_cancel_reasons()
+    if cancel_reasons_lookup is None:
+        logger.warning(
+            "Failed to fetch cancel reasons from API, using fallback data"
+        )
+        cancel_reasons_lookup = get_fallback_cancel_reasons()
+    else:
+        logger.info(
+            f"Successfully loaded {len(cancel_reasons_lookup)} cancel reasons from API"
+        )
 
     return order_sources_lookup, accounts_lookup, cancel_reasons_lookup
 
@@ -165,9 +352,11 @@ async def fetch_and_process_orders(start_date, end_date):
         f"Bắt đầu đồng bộ mysapogo.com từ {adjusted_start_date} đến {adjusted_end_date}"
     )
 
-    order_sources_lookup, accounts_lookup, cancel_reasons_lookup = (
-        create_lookup_tables()
-    )
+    (
+        order_sources_lookup,
+        accounts_lookup,
+        cancel_reasons_lookup,
+    ) = await create_lookup_tables()
     status_mapping = {
         "draft": "Đặt hàng",
         "finalized": "Đang giao dịch",

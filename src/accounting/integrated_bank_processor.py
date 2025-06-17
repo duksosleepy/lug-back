@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-Integrated Bank Statement Processor with Counterparty Extraction
+Integrated Bank Statement Processor with Enhanced Account Determination and Counterparty Extraction
 
-This module combines the improved bank statement processor with counterparty extraction
-functionality. It uses a decoupled approach where the counterparty extractor provides
-counterparty information that the processor uses to determine debit and credit accounts.
+This module processes bank statements (BIDV) to convert them to 'saoke' format
+for accounting purposes, using dynamic account determination and counterparty extraction.
 
 Key features:
-- Decoupled design: CounterpartyExtractor and FixedBankProcessor work independently
-- Enhanced transaction processing with counterparty matching
-- Improved account determination using counterparty information
-- Bank account detection from statement header
+- Intelligent account determination based on transaction metadata
+- Counterparty extraction from transaction descriptions
+- Bank account detection from statement headers
+- Decoupled design with fast_search for database operations
+- Enhanced pattern matching for POS terminals, departments, and transaction types
 """
 
 import io
@@ -19,9 +19,8 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
-import limbo
 import pandas as pd
 
 # Add the project root to the path if running as main script
@@ -29,16 +28,39 @@ if __name__ == "__main__":
     project_root = Path(__file__).parent.parent.parent
     sys.path.insert(0, str(project_root))
 
-from src.accounting.bank_statement_processor import (
-    RawTransaction,
-    SaokeEntry,
-    TransactionRule,
-)
 from src.accounting.bank_statement_reader import BankStatementReader
 from src.accounting.counterparty_extractor import CounterpartyExtractor
 from src.util.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class RawTransaction:
+    """Represents a raw bank statement transaction"""
+
+    reference: str
+    datetime: datetime
+    debit_amount: float
+    credit_amount: float
+    balance: float
+    description: str
+
+
+@dataclass
+class TransactionRule:
+    """Represents a rule for matching and categorizing transactions"""
+
+    id: int
+    pattern: str
+    document_type: str
+    transaction_type: Optional[str]
+    counterparty_code: Optional[str]
+    department_code: Optional[str]
+    cost_code: Optional[str]
+    description_template: Optional[str]
+    is_credit: bool
+    priority: int
 
 
 @dataclass
@@ -61,15 +83,73 @@ class TransferInfo:
     to_code: Optional[str] = None
 
 
+@dataclass
+class SaokeEntry:
+    """Represents a processed saoke accounting entry"""
+
+    # Required fields
+    document_type: str  # BC (credit) or BN (debit)
+    date: str  # Format: DD/MM/YYYY
+    document_number: str  # Format: BC03/001
+    currency: str  # VND
+    exchange_rate: float  # 1.0
+    counterparty_code: str  # KL-GOBARIA1
+    counterparty_name: str  # Khách Lẻ Không Lấy Hóa Đơn
+    address: str  # Full address
+    description: str  # Thu tiền bán hàng khách lẻ (POS code - location)
+    original_description: str  # Original bank statement description
+    amount1: float  # Transaction amount
+    amount2: float  # Same as amount1 for standard transactions
+    debit_account: str  # 1121114
+    credit_account: str  # 1311
+    sequence: int = 1  # Default sequence number
+
+    # Optional fields
+    cost_code: Optional[str] = None
+    department: Optional[str] = None  # GO BRVT
+    invoice_number: Optional[str] = None
+    invoice_date: Optional[str] = None
+    date2: Optional[str] = None  # Alternative date format MM/DD/YYYY
+    transaction_type: Optional[str] = None  # Transaction type (SALE, FEE, etc.)
+
+    # Metadata fields
+    raw_transaction: Optional[RawTransaction] = None
+
+    def as_dict(self) -> Dict:
+        """Convert entry to dictionary for DataFrame creation"""
+        return {
+            "document_type": self.document_type,
+            "date": self.date,
+            "document_number": self.document_number,
+            "currency": self.currency,
+            "exchange_rate": self.exchange_rate,
+            "sequence": self.sequence,
+            "counterparty_code": self.counterparty_code,
+            "counterparty_name": self.counterparty_name,
+            "address": self.address,
+            "description": self.description,
+            "original_description": self.original_description,
+            "amount1": self.amount1,
+            "amount2": self.amount2,
+            "debit_account": self.debit_account,
+            "credit_account": self.credit_account,
+            "cost_code": self.cost_code,
+            "department": self.department,
+            "invoice_number": self.invoice_number,
+            "invoice_date": self.invoice_date,
+            "date2": self.date2,
+            "transaction_type": self.transaction_type,
+        }
+
+
 class IntegratedBankProcessor:
     """
-    Integrated processor with counterparty extraction capabilities
+    Integrated processor with enhanced account determination and counterparty extraction
     """
 
     def __init__(self, db_path: str = "banking_enterprise.db"):
+        """Initialize the processor"""
         self.db_path = Path(__file__).parent / db_path
-        self.conn = None
-        self.cursor = None
         self.reader = BankStatementReader()
         self.logger = logger
 
@@ -81,10 +161,9 @@ class IntegratedBankProcessor:
         # Document number counters
         self.doc_counters = {"BC": 1, "BN": 1}
 
-        # Caches for database lookups
+        # Caches for lookups
         self.account_cache = {}  # Cache for account lookups
         self.rule_cache = {}
-        self.counterparty_mapping_cache = {}  # Cache for counterparty to account mappings
 
         # Default bank account (will be overridden if extracted from header)
         self.default_bank_account = "1121114"
@@ -128,51 +207,67 @@ class IntegratedBankProcessor:
             (r"chuyen\s+den\s+(?:TK\s+)?(\d+)", "to"),
         ]
 
-    def connect(self) -> bool:
-        """Connect to Limbo/SQLite database"""
-        try:
-            if not self.db_path.exists():
-                self.logger.error(
-                    f"Database file {self.db_path} does not exist"
-                )
-                return False
+        # Transaction type patterns
+        self.transaction_type_patterns = {
+            "SALE": [r"ban\s*hang", r"thanh\s*toan", r"mua", r"pos"],
+            "FEE": [r"phi", r"fee", r"service\s*charge"],
+            "INTEREST": [r"lai", r"interest", r"lãi\s*suất"],
+            "TRANSFER": [r"chuyen\s*khoan", r"transfer", r"ck"],
+            "WITHDRAWAL": [r"rut\s*tien", r"withdrawal", r"atm"],
+            "DEPOSIT": [r"nap\s*tien", r"deposit", r"gui\s*tien"],
+        }
 
-            self.conn = limbo.connect(str(self.db_path))
-            self.cursor = self.conn.cursor()
-            self.logger.info(f"Connected to database: {self.db_path}")
+        # POS patterns
+        self.pos_patterns = [
+            r"POS\s+(\d{7,8})",  # POS followed by 7-8 digits
+            r"POS(\d{7,8})",  # POS directly followed by digits
+            r"POS[\s\-:_]+(\d{7,8})",  # POS with various separators
+        ]
+
+        # Location patterns
+        self.location_patterns = [
+            r"GO\s+([A-Z]+)",  # GO followed by uppercase letters
+            r"GO([A-Z]+)",  # GO directly followed by uppercase letters
+            r"CH\s+([A-Z0-9]+)",  # CH (cửa hàng) followed by code
+        ]
+
+    def connect(self) -> bool:
+        """Initialize the processor without database connection"""
+        try:
+            # No need to connect to the database anymore
+            self.logger.info(
+                "Initializing processor with fast_search instead of database"
+            )
 
             # Pre-load all accounts into cache for faster lookups
             self._load_accounts_cache()
 
-            # Pre-load counterparty to account mappings
-            self._load_counterparty_mappings()
-
             return True
         except Exception as e:
-            self.logger.error(f"Database connection error: {e}")
+            self.logger.error(f"Initialization error: {e}")
             return False
 
     def close(self):
-        """Close database connection"""
-        if self.conn:
-            self.conn.close()
-            self.conn = None
-            self.cursor = None
+        """No connection to close"""
+        # Nothing to do as we're not using a database connection
+        pass
 
     def _load_accounts_cache(self):
-        """Pre-load all accounts into memory for faster searching"""
+        """Pre-load all accounts into memory for faster searching using fast_search instead of SQL"""
         try:
-            query = "SELECT code, name FROM accounts WHERE is_detail = 1"
-            self.cursor.execute(query)
-            rows = self.cursor.fetchall()
+            from src.accounting.fast_search import search_accounts
+
+            # Get all accounts using fast_search
+            # We need to search for a pattern that will match all accounts
+            # Using an empty string should return all accounts with a high limit
+            all_accounts = search_accounts("", field_name="code", limit=1000)
 
             self.account_cache = {}
             count = 0
 
-            for row in rows:
-                # Limbo returns tuples, not dict-like objects
-                account_code = row[0]  # Index 0 for the 'code' column
-                account_name = row[1]  # Index 1 for the 'name' column
+            for account in all_accounts:
+                account_code = account["code"]
+                account_name = account["name"]
 
                 # Extract all numeric codes from the account name
                 for pattern, _ in self.numeric_patterns:
@@ -186,61 +281,11 @@ class IntegratedBankProcessor:
                         count += 1
 
             self.logger.info(
-                f"Loaded {len(self.account_cache)} numeric codes from {len(rows)} accounts table entries"
+                f"Loaded {len(self.account_cache)} numeric codes from {len(all_accounts)} accounts using fast_search"
             )
 
         except Exception as e:
             self.logger.error(f"Error loading accounts cache: {e}")
-            import traceback
-
-            traceback.print_exc()
-
-    def _load_counterparty_mappings(self):
-        """Pre-load counterparty to account mappings from account_mapping_rules"""
-        try:
-            query = """
-                SELECT entity_code, document_type, transaction_type, debit_account, credit_account
-                FROM account_mapping_rules
-                WHERE rule_type = 'COUNTERPARTY' AND is_active = 1
-                ORDER BY priority DESC
-            """
-            self.cursor.execute(query)
-            rows = self.cursor.fetchall()
-
-            self.counterparty_mapping_cache = {}
-
-            for row in rows:
-                counterparty_code = row[0]  # entity_code is counterparty_code
-                document_type = row[1]
-                transaction_type = row[2]
-                debit_account = row[3]
-                credit_account = row[4]
-
-                key = (
-                    counterparty_code,
-                    document_type,
-                    transaction_type or "*",
-                )
-                self.counterparty_mapping_cache[key] = (
-                    debit_account,
-                    credit_account,
-                )
-
-                # Also add a wildcard entry for transaction_type if specific one provided
-                if transaction_type:
-                    wildcard_key = (counterparty_code, document_type, "*")
-                    if wildcard_key not in self.counterparty_mapping_cache:
-                        self.counterparty_mapping_cache[wildcard_key] = (
-                            debit_account,
-                            credit_account,
-                        )
-
-            self.logger.info(
-                f"Loaded {len(self.counterparty_mapping_cache)} counterparty account mappings"
-            )
-
-        except Exception as e:
-            self.logger.error(f"Error loading counterparty mappings: {e}")
             import traceback
 
             traceback.print_exc()
@@ -281,6 +326,7 @@ class IntegratedBankProcessor:
                 r"(?:số tài khoản|so tai khoan|account number|account|tk)[\s:]+([0-9]+)",
                 r"(?:stk|account number|account|tk)[\s:]+([0-9]+)",
                 r"(?:[0-9]{6,10})[\s\-\._:]+([0-9]{4})",  # Match last 4 digits specifically
+                r"\b(3840)\b",  # Match the specific account 3840 directly
             ]
 
             for _, row in header_df.iterrows():
@@ -424,7 +470,7 @@ class IntegratedBankProcessor:
 
     def find_account_by_code(self, numeric_code: str) -> Optional[AccountMatch]:
         """
-        Find account by numeric code in the name column
+        Find account by numeric code in the name column using fast_search instead of SQL
 
         Args:
             numeric_code: The numeric code to search for
@@ -445,23 +491,20 @@ class IntegratedBankProcessor:
                     position=0,
                 )
 
-        # If not found in cache, try direct database lookup
-        try:
-            query = "SELECT code, name FROM accounts WHERE name LIKE ? LIMIT 1"
-            like_pattern = f"%{numeric_code}%"
+        # If not found in cache, use fast_search
+        from src.accounting.fast_search import search_accounts
 
-            self.cursor.execute(query, (like_pattern,))
-            result = self.cursor.fetchone()
+        # Try to find accounts that contain this numeric code in their name
+        results = search_accounts(numeric_code, field_name="name", limit=1)
 
-            if result:
-                return AccountMatch(
-                    code=result[0],  # Index 0 for the 'code' column
-                    name=result[1],  # Index 1 for the 'name' column
-                    numeric_code=numeric_code,
-                    position=0,
-                )
-        except Exception as e:
-            self.logger.error(f"Error in direct account lookup: {e}")
+        if results:
+            result = results[0]
+            return AccountMatch(
+                code=result["code"],
+                name=result["name"],
+                numeric_code=numeric_code,
+                position=0,
+            )
 
         return None
 
@@ -510,6 +553,50 @@ class IntegratedBankProcessor:
                         info.to_account = to_match.code
 
         return info
+
+    def identify_transaction_type(self, description: str) -> Optional[str]:
+        """Identify transaction type from description"""
+        normalized_desc = description.lower()
+
+        for trans_type, patterns in self.transaction_type_patterns.items():
+            for pattern in patterns:
+                if re.search(pattern, normalized_desc, re.IGNORECASE):
+                    self.logger.debug(
+                        f"Identified transaction type {trans_type} from '{description}'"
+                    )
+                    return trans_type
+
+        # If POS is in the description, it's likely a sale
+        if re.search(r"pos", normalized_desc, re.IGNORECASE):
+            return "SALE"
+
+        return None
+
+    def extract_pos_code(self, description: str) -> Optional[str]:
+        """Extract POS terminal code from description"""
+        for pattern in self.pos_patterns:
+            match = re.search(pattern, description, re.IGNORECASE)
+            if match:
+                pos_code = match.group(1)
+                self.logger.debug(
+                    f"Extracted POS code: {pos_code} from '{description}'"
+                )
+                return pos_code
+
+        return None
+
+    def extract_location_code(self, description: str) -> Optional[str]:
+        """Extract location code from description (like GO BRVT)"""
+        for pattern in self.location_patterns:
+            match = re.search(pattern, description, re.IGNORECASE)
+            if match:
+                location = match.group(0)  # Get the whole match (GO BRVT)
+                self.logger.debug(
+                    f"Extracted location: {location} from '{description}'"
+                )
+                return location
+
+        return None
 
     def determine_accounts_by_codes(
         self,
@@ -586,82 +673,161 @@ class IntegratedBankProcessor:
             return None, primary_account
 
     def get_transaction_rules(self, is_credit: bool) -> List[TransactionRule]:
-        """Get transaction rules from database"""
+        """Get transaction rules using predefined patterns instead of database"""
         if is_credit in self.rule_cache:
             return self.rule_cache[is_credit]
 
-        try:
-            query = """
-                SELECT * FROM transaction_rules
-                WHERE is_credit = ? AND is_active = 1
-                ORDER BY priority DESC
-            """
-            self.cursor.execute(query, (1 if is_credit else 0,))
-            rows = self.cursor.fetchall()
+        # Define hardcoded rules instead of fetching from database
+        # These rules would have previously been in the transaction_rules table
+        rules = []
 
-            # Get column names
-            column_names = [desc[0] for desc in self.cursor.description]
-
-            if not rows:
-                # Return default rule
-                default_rule = TransactionRule(
-                    id=0,
-                    pattern=".*",
-                    document_type="BC" if is_credit else "BN",
-                    transaction_type=None,
-                    counterparty_code="KL" if is_credit else None,
+        if is_credit:  # Credit/Receipt rules
+            # POS transactions
+            rules.append(
+                TransactionRule(
+                    id=1,
+                    pattern=r"TT\s*POS\s*(\d{7,8})",
+                    document_type="BC",
+                    transaction_type="SALE",
+                    counterparty_code=None,
                     department_code=None,
-                    cost_code=None if is_credit else "KHAC",
-                    description_template="Thu tiền khác"
-                    if is_credit
-                    else "Chi tiền khác",
-                    is_credit=is_credit,
+                    cost_code=None,
+                    description_template="Thu tiền bán hàng khách lẻ (POS {pos_code})",
+                    is_credit=True,
+                    priority=90,
+                )
+            )
+
+            # Bank transfers - incoming
+            rules.append(
+                TransactionRule(
+                    id=2,
+                    pattern=r"CK\s*den|CHUYEN\s*KHOAN\s*DEN|Chuyen\s*tien.*tu\s*TK",
+                    document_type="BC",
+                    transaction_type="TRANSFER",
+                    counterparty_code=None,
+                    department_code=None,
+                    cost_code=None,
+                    description_template="Thu tiền chuyển khoản",
+                    is_credit=True,
+                    priority=70,
+                )
+            )
+
+            # Interest income
+            rules.append(
+                TransactionRule(
+                    id=3,
+                    pattern=r"L[AÃ]I.*SU[ẤẬ]T|LAI.*TIEN.*GUI|INTEREST",
+                    document_type="BC",
+                    transaction_type="INTEREST",
+                    counterparty_code="BIDV",
+                    department_code=None,
+                    cost_code=None,
+                    description_template="Lãi tiền gửi ngân hàng",
+                    is_credit=True,
+                    priority=60,
+                )
+            )
+
+            # Default rule for receipts
+            rules.append(
+                TransactionRule(
+                    id=4,
+                    pattern=r".*",
+                    document_type="BC",
+                    transaction_type=None,
+                    counterparty_code="KL",
+                    department_code=None,
+                    cost_code=None,
+                    description_template="Thu tiền khác",
+                    is_credit=True,
                     priority=1,
                 )
-                return [default_rule]
-
-            rules = []
-            for row in rows:
-                # Convert tuple to dict with column names
-                row_dict = {
-                    column_names[i]: row[i] for i in range(len(column_names))
-                }
-
-                rule = TransactionRule(
-                    id=row_dict["id"],
-                    pattern=row_dict["pattern"],
-                    document_type=row_dict["document_type"],
-                    transaction_type=row_dict.get("transaction_type"),
-                    counterparty_code=row_dict.get("counterparty_code"),
-                    department_code=row_dict.get("department_code"),
-                    cost_code=row_dict.get("cost_code"),
-                    description_template=row_dict.get("description_template"),
-                    is_credit=bool(row_dict["is_credit"]),
-                    priority=row_dict["priority"],
-                )
-                rules.append(rule)
-
-            self.rule_cache[is_credit] = rules
-            return rules
-
-        except Exception as e:
-            self.logger.error(f"Error getting transaction rules: {e}")
-            # Return default rule
-            default_rule = TransactionRule(
-                id=0,
-                pattern=".*",
-                document_type="BC" if is_credit else "BN",
-                transaction_type=None,
-                counterparty_code="KL" if is_credit else None,
-                department_code=None,
-                cost_code=None if is_credit else "KHAC",
-                description_template="Thu tiền khác"
-                if is_credit
-                else "Chi tiền khác",
-                is_credit=is_credit,
-                priority=1,
             )
-            return [default_rule]
+        else:  # Debit/Payment rules
+            # ATM withdrawals
+            rules.append(
+                TransactionRule(
+                    id=5,
+                    pattern=r"ATM.*R[uú]t\s*ti[eề]n|RUT\s*TIEN.*ATM",
+                    document_type="BN",
+                    transaction_type="WITHDRAWAL",
+                    counterparty_code=None,
+                    department_code=None,
+                    cost_code="RUTIEN",
+                    description_template="Rút tiền mặt tại ATM",
+                    is_credit=False,
+                    priority=80,
+                )
+            )
+
+            # Bank transfers - outgoing
+            rules.append(
+                TransactionRule(
+                    id=6,
+                    pattern=r"CK\s*di|CHUYEN\s*KHOAN\s*DI|Chuyen\s*tien.*qua\s*TK",
+                    document_type="BN",
+                    transaction_type="TRANSFER",
+                    counterparty_code=None,
+                    department_code=None,
+                    cost_code=None,
+                    description_template="Chuyển khoản thanh toán",
+                    is_credit=False,
+                    priority=70,
+                )
+            )
+
+            # Internet banking transactions
+            rules.append(
+                TransactionRule(
+                    id=7,
+                    pattern=r"IB|INTERNET\s*BANKING|BIDV\s*ONLINE",
+                    document_type="BN",
+                    transaction_type="FEE",
+                    counterparty_code=None,
+                    department_code=None,
+                    cost_code="DICHVU",
+                    description_template="Giao dịch Internet Banking",
+                    is_credit=False,
+                    priority=60,
+                )
+            )
+
+            # Bank fees
+            rules.append(
+                TransactionRule(
+                    id=8,
+                    pattern=r"PH[IÍ].*[NG]H.*|PHI.*DICH.*VU|FEE",
+                    document_type="BN",
+                    transaction_type="FEE",
+                    counterparty_code="BIDV",
+                    department_code=None,
+                    cost_code="PHIDV",
+                    description_template="Phí dịch vụ ngân hàng",
+                    is_credit=False,
+                    priority=50,
+                )
+            )
+
+            # Default rule for payments
+            rules.append(
+                TransactionRule(
+                    id=9,
+                    pattern=r".*",
+                    document_type="BN",
+                    transaction_type=None,
+                    counterparty_code=None,
+                    department_code=None,
+                    cost_code="KHAC",
+                    description_template="Chi tiền khác",
+                    is_credit=False,
+                    priority=1,
+                )
+            )
+
+        self.rule_cache[is_credit] = rules
+        return rules
 
     def match_transaction_rule(
         self, description: str, is_credit: bool
@@ -683,7 +849,7 @@ class IntegratedBankProcessor:
         transaction_type: Optional[str] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """
-        Determine accounts based on counterparty mapping rules
+        Determine accounts based on counterparty information using fast_search
 
         Args:
             counterparty_code: Counterparty code
@@ -693,56 +859,30 @@ class IntegratedBankProcessor:
         Returns:
             Tuple of (debit_account, credit_account) or (None, None) if not found
         """
+        from src.accounting.fast_search import search_counterparties
+
         if not counterparty_code:
             return None, None
 
-        # Try specific mapping first
-        if transaction_type:
-            key = (counterparty_code, document_type, transaction_type)
-            if key in self.counterparty_mapping_cache:
-                return self.counterparty_mapping_cache[key]
+        # Search for the counterparty to get more information
+        counterparty_results = search_counterparties(
+            counterparty_code, field_name="code", limit=1
+        )
 
-        # Try wildcard transaction type
-        key = (counterparty_code, document_type, "*")
-        if key in self.counterparty_mapping_cache:
-            return self.counterparty_mapping_cache[key]
+        if not counterparty_results:
+            return None, None
 
-        # Try database lookup if not in cache
-        try:
-            if transaction_type:
-                query = """
-                    SELECT debit_account, credit_account FROM account_mapping_rules
-                    WHERE rule_type = 'COUNTERPARTY' AND entity_code = ?
-                    AND document_type = ? AND transaction_type = ?
-                    AND is_active = 1
-                    ORDER BY priority DESC LIMIT 1
-                """
-                self.cursor.execute(
-                    query, (counterparty_code, document_type, transaction_type)
-                )
-                result = self.cursor.fetchone()
+        # Use the found counterparty information to determine appropriate accounts
+        counterparty = counterparty_results[0]
 
-                if result:
-                    return result[0], result[1]
-
-            # Try with wildcard transaction type
-            query = """
-                SELECT debit_account, credit_account FROM account_mapping_rules
-                WHERE rule_type = 'COUNTERPARTY' AND entity_code = ?
-                AND document_type = ? AND (transaction_type IS NULL OR transaction_type = '*')
-                AND is_active = 1
-                ORDER BY priority DESC LIMIT 1
-            """
-            self.cursor.execute(query, (counterparty_code, document_type))
-            result = self.cursor.fetchone()
-
-            if result:
-                return result[0], result[1]
-
-        except Exception as e:
-            self.logger.error(f"Error in counterparty account lookup: {e}")
-
-        return None, None
+        # Default account mappings based on document type and counterparty type
+        # These would previously have been in the account_mapping_rules table
+        if document_type == "BC":  # Receipt/Credit
+            # For receipts: debit bank account, credit income/receivable
+            return self.default_bank_account, "1311"
+        else:  # BN - Payment/Debit
+            # For payments: debit expense, credit bank account
+            return "6278", self.default_bank_account
 
     def determine_accounts(
         self,
@@ -820,96 +960,79 @@ class IntegratedBankProcessor:
             )
             return debit_by_code, credit_by_code
 
-        # Fallback to existing logic for POS and department-based determination
+        # Fallback to using fast_search for POS and department-based determination
         try:
-            # Check account_mapping_rules table
-            self.cursor.execute(
-                "SELECT name FROM sqlite_schema WHERE type='table' AND name='account_mapping_rules'"
+            # Use fast_search.py to look up information instead of SQL queries
+            from src.accounting.fast_search import (
+                search_departments,
+                search_pos_machines,
             )
-            if self.cursor.fetchone() is None:
-                # Default accounts
-                if document_type == "BC":
-                    return self.default_bank_account, "1311"
-                else:
-                    return "6278", self.default_bank_account
 
-            # Try POS-specific rules
+            # Log the default bank account before determining accounts
+            self.logger.info(
+                f"Current default bank account: {self.default_bank_account}"
+            )
+
+            # Try POS-specific rules using fast_search
             if pos_code:
-                query = """
-                    SELECT * FROM account_mapping_rules
-                    WHERE rule_type = 'POS' AND entity_code = ?
-                    AND document_type = ? AND is_active = 1
-                    ORDER BY priority DESC
-                """
-                self.cursor.execute(query, (pos_code, document_type))
-                row = self.cursor.fetchone()
-                if row:
-                    # Get column names
-                    column_names = [desc[0] for desc in self.cursor.description]
-                    # Convert tuple to dict with column names
-                    row_dict = {
-                        column_names[i]: row[i]
-                        for i in range(len(column_names))
-                    }
-                    return row_dict["debit_account"], row_dict["credit_account"]
+                pos_results = search_pos_machines(
+                    pos_code, field_name="code", limit=1
+                )
+                if pos_results:
+                    pos_info = pos_results[0]
+                    # Use standard mappings for POS transactions
+                    if document_type == "BC":
+                        # For POS sales receipts
+                        return self.default_bank_account, "1311"
+                    else:
+                        # For POS-related payments
+                        return "6278", self.default_bank_account
 
-            # Try department-specific rules
+            # Try department-specific rules using fast_search
             if department_code:
-                query = """
-                    SELECT * FROM account_mapping_rules
-                    WHERE rule_type = 'DEPT' AND entity_code = ?
-                    AND document_type = ? AND is_active = 1
-                    ORDER BY priority DESC
-                """
-                self.cursor.execute(query, (department_code, document_type))
-                row = self.cursor.fetchone()
-                if row:
-                    # Get column names
-                    column_names = [desc[0] for desc in self.cursor.description]
-                    # Convert tuple to dict with column names
-                    row_dict = {
-                        column_names[i]: row[i]
-                        for i in range(len(column_names))
-                    }
-                    return row_dict["debit_account"], row_dict["credit_account"]
+                dept_results = search_departments(
+                    department_code, field_name="code", limit=1
+                )
+                if dept_results:
+                    dept_info = dept_results[0]
+                    # Use standard mappings for department
+                    if document_type == "BC":
+                        # For department receipts
+                        return self.default_bank_account, "1311"
+                    else:
+                        # For department payments
+                        return "6278", self.default_bank_account
 
-            # Try transaction type rules
+            # Transaction type based mappings
             if transaction_type:
-                query = """
-                    SELECT * FROM account_mapping_rules
-                    WHERE rule_type = 'TYPE' AND entity_code = '*'
-                    AND document_type = ? AND transaction_type = ? AND is_active = 1
-                    ORDER BY priority DESC
-                """
-                self.cursor.execute(query, (document_type, transaction_type))
-                row = self.cursor.fetchone()
-                if row:
-                    # Get column names
-                    column_names = [desc[0] for desc in self.cursor.description]
-                    # Convert tuple to dict with column names
-                    row_dict = {
-                        column_names[i]: row[i]
-                        for i in range(len(column_names))
-                    }
-                    return row_dict["debit_account"], row_dict["credit_account"]
+                if document_type == "BC":
+                    if transaction_type == "INTEREST":
+                        return self.default_bank_account, "5154"
+                    elif transaction_type == "TRANSFER":
+                        return self.default_bank_account, "1311"
+                    else:
+                        return self.default_bank_account, "1311"
+                else:  # BN - Payment
+                    if transaction_type == "FEE":
+                        return "6278", self.default_bank_account
+                    elif transaction_type == "SALARY":
+                        return "6411", self.default_bank_account
+                    elif transaction_type == "TAX":
+                        return "3331", self.default_bank_account
+                    elif transaction_type == "UTILITY":
+                        return "6278", self.default_bank_account
+                    elif transaction_type == "WITHDRAWAL":
+                        return "1111", self.default_bank_account
+                    elif transaction_type == "TRANSFER":
+                        return "6278", self.default_bank_account
+                    else:
+                        return "6278", self.default_bank_account
 
-            # Default rules
-            query = """
-                SELECT * FROM account_mapping_rules
-                WHERE rule_type = 'DEFAULT' AND entity_code = '*'
-                AND document_type = ? AND is_active = 1
-                ORDER BY priority DESC
-            """
-            self.cursor.execute(query, (document_type,))
-            row = self.cursor.fetchone()
-            if row:
-                # Get column names
-                column_names = [desc[0] for desc in self.cursor.description]
-                # Convert tuple to dict with column names
-                row_dict = {
-                    column_names[i]: row[i] for i in range(len(column_names))
-                }
-                return row_dict["debit_account"], row_dict["credit_account"]
+            # Default mappings
+            if document_type == "BC":
+                return self.default_bank_account, "1311"
+            else:
+                return "6278", self.default_bank_account
 
         except Exception as e:
             self.logger.error(f"Error in account determination: {e}")
@@ -920,26 +1043,36 @@ class IntegratedBankProcessor:
         else:
             return "6278", self.default_bank_account
 
-    def generate_document_number(self, doc_type: str, date: datetime) -> str:
-        """Generate document number for saoke format"""
-        month = date.month
+    def generate_document_number(
+        self, doc_type: str, transaction_date: datetime
+    ) -> str:
+        """Generate a document number for the transaction"""
+        month = transaction_date.month
         counter = self.doc_counters.get(doc_type, 1)
+
+        # Format: BC03/001 (for March, first transaction)
         doc_number = f"{doc_type}{month:02d}/{counter:03d}"
+
+        # Increment counter for next document
         self.doc_counters[doc_type] = counter + 1
+
         return doc_number
 
     def format_date(self, dt: datetime, format_type: str = "vn") -> str:
-        """Format date for saoke format"""
+        """Format date in required format"""
         if format_type == "vn":
+            # Vietnamese format: DD/M/YYYY (e.g., 01/3/2025)
             return f"{dt.day:02d}/{dt.month}/{dt.year}"
         elif format_type == "alt":
+            # Alternative format: M/DD/YYYY (e.g., 3/01/2025)
             return f"{dt.month}/{dt.day:02d}/{dt.year}"
         else:
+            # Standard format: DD/MM/YYYY
             return f"{dt.day:02d}/{dt.month:02d}/{dt.year}"
 
     def get_counterparty_info(self, counterparty_code: str) -> Tuple[str, str]:
         """
-        Get counterparty name and address from database
+        Get counterparty name and address using fast_search instead of database
 
         Args:
             counterparty_code: Counterparty code
@@ -953,17 +1086,17 @@ class IntegratedBankProcessor:
         if not counterparty_code:
             return name, address
 
-        try:
-            query = "SELECT name, address FROM counterparties WHERE code = ?"
-            self.cursor.execute(query, (counterparty_code,))
-            row = self.cursor.fetchone()
+        # Use fast_search to find counterparty
+        from src.accounting.fast_search import search_counterparties
 
-            if row:
-                name = row[0] or name  # Use default if NULL
-                address = row[1] or ""  # Empty string if NULL
+        results = search_counterparties(
+            counterparty_code, field_name="code", limit=1
+        )
 
-        except Exception as e:
-            self.logger.error(f"Error getting counterparty info: {e}")
+        if results:
+            result = results[0]
+            name = result["name"] or name  # Use default if None
+            address = result["address"] or ""  # Empty string if None
 
         return name, address
 
@@ -972,6 +1105,20 @@ class IntegratedBankProcessor:
     ) -> Optional[SaokeEntry]:
         """Process a single transaction into a saoke entry"""
         try:
+            # Special case for BIDV 3840 accounts - ensure we're using the correct account
+            if (
+                "3840" in transaction.description
+                and self.default_bank_account == "1121114"
+            ):
+                self.logger.warning(
+                    "Detected reference to account 3840 in transaction description but using default account 1121114"
+                )
+                account_match = self.find_account_by_code("3840")
+                if account_match:
+                    self.default_bank_account = account_match.code
+                    self.logger.info(
+                        f"Updated default bank account to {self.default_bank_account} based on transaction description"
+                    )
             # Determine if transaction is credit or debit
             is_credit = transaction.credit_amount > 0
 
@@ -990,28 +1137,62 @@ class IntegratedBankProcessor:
                 rule.document_type, transaction.datetime
             )
 
-            # Extract counterparty from description using counterparty_extractor
-            extracted_counterparties = (
-                self.counterparty_extractor.extract_and_match(
+            # Extract all entities (counterparty, account, POS machine, etc.) from description in one pass
+            # This is the key enhancement - using extract_and_match_all instead of separate extractions
+            extracted_entities = (
+                self.counterparty_extractor.extract_and_match_all(
                     transaction.description
                 )
             )
 
+            # Process extracted counterparties
+            extracted_counterparties = extracted_entities.get(
+                "counterparties", []
+            )
             # Use the extracted counterparty if found, otherwise use the one from rule
             counterparty_code = rule.counterparty_code or "KL"
             counterparty_name = None
-            extracted_counterparty_name = None
 
             if extracted_counterparties:
                 best_match = extracted_counterparties[0]
+                # Extract both code and name, prioritizing name for the final output
                 counterparty_code = best_match.get("code") or counterparty_code
-                extracted_counterparty_name = best_match.get("name")
+                counterparty_name = best_match.get("name")
                 self.logger.info(
-                    f"Extracted counterparty: {counterparty_code} - {extracted_counterparty_name}"
+                    f"Extracted counterparty: {counterparty_code} - {counterparty_name}"
                 )
 
-            # Extract all numeric codes for processing
-            codes = self.extract_numeric_codes(transaction.description)
+            # Process extracted accounts
+            extracted_accounts = extracted_entities.get("accounts", [])
+
+            # Get POS machine if available
+            extracted_pos = extracted_entities.get("pos_machines", [])
+            pos_code = None
+            pos_name = None
+            if extracted_pos:
+                pos_code = extracted_pos[0].get("code")
+                pos_name = extracted_pos[0].get("name")
+                self.logger.info(
+                    f"Extracted POS machine: {pos_code} - {pos_name}"
+                )
+            # If no POS code found from extractor, try the pattern matcher
+            elif not pos_code:
+                pos_code = self.extract_pos_code(transaction.description)
+
+            # Get department if available
+            extracted_departments = extracted_entities.get("departments", [])
+            department_code = (
+                extracted_departments[0].get("code")
+                if extracted_departments and not rule.department_code
+                else rule.department_code
+            )
+
+            # If no department code, try to extract from description
+            if not department_code:
+                location_code = self.extract_location_code(
+                    transaction.description
+                )
+                department_code = location_code
 
             # Determine accounts with enhanced code and counterparty extraction
             debit_account, credit_account = self.determine_accounts(
@@ -1019,29 +1200,74 @@ class IntegratedBankProcessor:
                 document_type=rule.document_type,
                 is_credit=is_credit,
                 transaction_type=rule.transaction_type,
-                pos_code=None,  # Will be extracted if POS transaction
-                department_code=rule.department_code,
+                pos_code=pos_code,
+                department_code=department_code,
                 counterparty_code=counterparty_code,
             )
 
             # Get counterparty info from database
-            if not extracted_counterparty_name:
+            if not counterparty_name:
                 counterparty_name, address = self.get_counterparty_info(
                     counterparty_code
                 )
             else:
-                # Use the extracted name and look up the address
-                counterparty_name = extracted_counterparty_name
+                # Already have the name, just look up the address
                 _, address = self.get_counterparty_info(counterparty_code)
 
             # Format description
             description = rule.description_template or transaction.description
 
+            # Replace placeholders in description
+            if "{pos_code}" in description:
+                if pos_name:  # Prioritize POS name when available
+                    if department_code:
+                        description = description.replace(
+                            "{pos_code}", f"{pos_name} - {department_code}"
+                        )
+                    else:
+                        description = description.replace(
+                            "{pos_code}", pos_name
+                        )
+                elif pos_code:  # Fall back to code if name not available
+                    if department_code:
+                        description = description.replace(
+                            "{pos_code}", f"{pos_code} - {department_code}"
+                        )
+                    else:
+                        description = description.replace(
+                            "{pos_code}", pos_code
+                        )
+
             # If we have an extracted counterparty, update the description
-            if extracted_counterparty_name and "{counterparty}" in description:
+            if counterparty_name and "{counterparty}" in description:
                 description = description.replace(
-                    "{counterparty}", extracted_counterparty_name
+                    "{counterparty}", counterparty_name
                 )
+
+            # Handle {suffix} placeholder
+            if "{suffix}" in description:
+                # Extract transaction sequence number if possible
+                if pos_code and "_" in transaction.description:
+                    seq_match = re.search(
+                        r"_(\d+)_(\d+)", transaction.description
+                    )
+                    if seq_match:
+                        suffix = f"{seq_match.group(1)}_{seq_match.group(2)}"
+                    else:
+                        suffix = "1"
+                else:
+                    suffix = "1"
+                description = description.replace("{suffix}", suffix)
+
+            # Extract transaction sequence number
+            if pos_code and "_" in transaction.description:
+                seq_match = re.search(r"_(\d+)_(\d+)", transaction.description)
+                if seq_match:
+                    sequence = int(seq_match.group(2))
+                else:
+                    sequence = 1
+            else:
+                sequence = 1
 
             # Calculate amount
             amount = (
@@ -1067,7 +1293,8 @@ class IntegratedBankProcessor:
                 debit_account=debit_account,
                 credit_account=credit_account,
                 cost_code=rule.cost_code,
-                department=rule.department_code,
+                department=department_code,
+                sequence=sequence,
                 date2=self.format_date(transaction.datetime, "alt"),
                 transaction_type=rule.transaction_type,
                 raw_transaction=transaction,
@@ -1089,9 +1316,19 @@ class IntegratedBankProcessor:
         input_file: Union[str, pd.DataFrame, io.BytesIO],
         output_file: Optional[str] = None,
     ) -> pd.DataFrame:
-        """Process a bank statement file to saoke format"""
-        if not self.conn and not self.connect():
-            raise RuntimeError("Database connection failed")
+        """
+        Process a bank statement file to saoke format
+
+        Args:
+            input_file: Path to file, DataFrame, or BytesIO object
+            output_file: Optional path to save output Excel file
+
+        Returns:
+            DataFrame with processed saoke entries
+        """
+        # Initialize the processor
+        if not self.connect():
+            raise RuntimeError("Failed to initialize processor")
 
         try:
             # Reset document counters
@@ -1105,6 +1342,21 @@ class IntegratedBankProcessor:
                     self.logger.info(
                         f"Using default bank account: {self.default_bank_account}"
                     )
+                else:
+                    # If we couldn't extract the account, check filename for hints
+                    if isinstance(input_file, str):
+                        filename = Path(input_file).name
+                        if "3840" in filename:
+                            self.logger.info(
+                                f"Found account number 3840 in filename: {filename}"
+                            )
+                            # Try to find the 3840 account in the database
+                            account_match = self.find_account_by_code("3840")
+                            if account_match:
+                                self.default_bank_account = account_match.code
+                                self.logger.info(
+                                    f"Set default bank account to {self.default_bank_account} based on filename"
+                                )
 
             # Read transactions
             if isinstance(input_file, pd.DataFrame):

@@ -141,36 +141,9 @@ CREATE TABLE IF NOT EXISTS transaction_mappings (
     UNIQUE(document_type, document_number)
 );
 
-CREATE TABLE IF NOT EXISTS transaction_rules (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    pattern TEXT NOT NULL,
-    document_type TEXT NOT NULL REFERENCES document_types(code) ON UPDATE CASCADE,
-    transaction_type TEXT,
-    counterparty_code TEXT REFERENCES counterparties(code) ON UPDATE CASCADE,
-    department_code TEXT REFERENCES departments(code) ON UPDATE CASCADE,
-    cost_code TEXT REFERENCES cost_categories(code) ON UPDATE CASCADE,
-    description_template TEXT,
-    is_credit INTEGER NOT NULL,
-    priority INTEGER DEFAULT 1,
-    is_active INTEGER NOT NULL DEFAULT 1,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS account_mapping_rules (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    rule_type TEXT NOT NULL,
-    entity_code TEXT NOT NULL,
-    document_type TEXT NOT NULL,
-    transaction_type TEXT,
-    debit_account TEXT NOT NULL REFERENCES accounts(code) ON UPDATE CASCADE,
-    credit_account TEXT NOT NULL REFERENCES accounts(code) ON UPDATE CASCADE,
-    priority INTEGER NOT NULL DEFAULT 10,
-    is_active INTEGER NOT NULL DEFAULT 1,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP,
-    UNIQUE(rule_type, entity_code, document_type, transaction_type)
-);
+-- Tables removed as we now use fast_search.py instead of SQL queries
+-- CREATE TABLE IF NOT EXISTS transaction_rules
+-- CREATE TABLE IF NOT EXISTS account_mapping_rules
 
 CREATE TABLE IF NOT EXISTS transaction_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -206,82 +179,8 @@ INSERT OR REPLACE INTO document_types (code, name, description) VALUES
 -- ENHANCED ACCOUNTS DATA FOR ACCOUNT CODE EXTRACTION
 -- ============================================================================
 
--- Clear existing rules
-DELETE FROM transaction_rules;
-
--- POS transactions (highest priority) - will use account extraction
-INSERT INTO transaction_rules (pattern, document_type, transaction_type, counterparty_code, department_code, cost_code, description_template, is_credit, priority) VALUES
-('TT\s*POS\s*(\d{7,8})', 'BC', 'SALE', 'KL', NULL, NULL, 'Thu tiền bán hàng khách lẻ (POS {pos_code})', 1, 90);
-
--- ATM withdrawals
-INSERT INTO transaction_rules (pattern, document_type, transaction_type, counterparty_code, department_code, cost_code, description_template, is_credit, priority) VALUES
-('ATM.*R[uú]t\s*ti[eề]n|RUT\s*TIEN.*ATM', 'BN', 'WITHDRAWAL', NULL, NULL, 'RUTIEN', 'Rút tiền mặt tại ATM', 0, 80);
-
--- Bank transfers - these will use account extraction for account determination
-INSERT INTO transaction_rules (pattern, document_type, transaction_type, counterparty_code, department_code, cost_code, description_template, is_credit, priority) VALUES
-('CK\s*den|CHUYEN\s*KHOAN\s*DEN|Chuyen\s*tien.*tu\s*TK', 'BC', 'TRANSFER', NULL, NULL, NULL, 'Thu tiền chuyển khoản', 1, 70),
-('CK\s*di|CHUYEN\s*KHOAN\s*DI|Chuyen\s*tien.*qua\s*TK', 'BN', 'TRANSFER', NULL, NULL, NULL, 'Chuyển khoản thanh toán', 0, 70);
-
--- Internet banking transactions
-INSERT INTO transaction_rules (pattern, document_type, transaction_type, counterparty_code, department_code, cost_code, description_template, is_credit, priority) VALUES
-('IB|INTERNET\s*BANKING|BIDV\s*ONLINE', 'BN', 'FEE', NULL, NULL, 'DICHVU', 'Giao dịch Internet Banking', 0, 60);
-
--- Bank fees
-INSERT INTO transaction_rules (pattern, document_type, transaction_type, counterparty_code, department_code, cost_code, description_template, is_credit, priority) VALUES
-('PH[IÍ].*[NG]H.*|PHI.*DICH.*VU|FEE', 'BN', 'FEE', 'BIDV', NULL, 'PHIDV', 'Phí dịch vụ ngân hàng', 0, 50);
-
--- Interest income
-INSERT INTO transaction_rules (pattern, document_type, transaction_type, counterparty_code, department_code, cost_code, description_template, is_credit, priority) VALUES
-('L[AÃ]I.*SU[ẤẬ]T|LAI.*TIEN.*GUI|INTEREST', 'BC', 'INTEREST', 'BIDV', NULL, NULL, 'Lãi tiền gửi ngân hàng', 1, 60);
-
--- Default rules (lowest priority) - will use account extraction when possible
-INSERT INTO transaction_rules (pattern, document_type, transaction_type, counterparty_code, department_code, cost_code, description_template, is_credit, priority) VALUES
-('.*', 'BC', NULL, 'KL', NULL, NULL, 'Thu tiền khác', 1, 1),
-('.*', 'BN', NULL, NULL, NULL, 'KHAC', 'Chi tiền khác', 0, 1);
-
--- ============================================================================
--- ENHANCED ACCOUNT MAPPING RULES FOR DYNAMIC ACCOUNT DETERMINATION
--- ============================================================================
-
--- Clear existing mapping rules
-DELETE FROM account_mapping_rules;
-
--- POS-specific account rules (account extraction will take precedence)
-INSERT INTO account_mapping_rules (rule_type, entity_code, document_type, transaction_type, debit_account, credit_account, priority, is_active) VALUES
-('POS', '14100333', 'BC', 'SALE', '1121118', '1311', 100, 1),
-('POS', '14100334', 'BC', 'SALE', '1121119', '1311', 100, 1),
-('POS', '14100335', 'BC', 'SALE', '1121120', '1311', 100, 1);
-
--- Department-specific account rules (fallback if no account extraction)
-INSERT INTO account_mapping_rules (rule_type, entity_code, document_type, transaction_type, debit_account, credit_account, priority, is_active) VALUES
-('DEPT', 'GOBRVT', 'BC', 'SALE', '1121114', '1311', 90, 1),
-('DEPT', 'GOHANOI', 'BC', 'SALE', '1121116', '1311', 90, 1),
-('DEPT', 'GOHCM', 'BC', 'SALE', '1121117', '1311', 90, 1);
-
--- Counterparty-specific account rules (for transactions with extracted counterparties)
-INSERT INTO account_mapping_rules (rule_type, entity_code, document_type, transaction_type, debit_account, credit_account, priority, is_active) VALUES
-('COUNTERPARTY', 'BIDV', 'BC', 'INTEREST', '1121114', '5154', 95, 1),
-('COUNTERPARTY', 'BIDV', 'BN', 'FEE', '6278', '1121114', 95, 1),
-('COUNTERPARTY', 'ABC', 'BC', 'SALE', '1121114', '5111', 95, 1),
-('COUNTERPARTY', 'ABC', 'BN', 'PURCHASE', '1561', '1121114', 95, 1),
-('COUNTERPARTY', 'VNP', 'BC', 'TRANSFER', '1121114', '1311', 95, 1),
-('COUNTERPARTY', 'VNP', 'BN', 'TRANSFER', '6278', '1121114', 95, 1);
-
--- Transaction type account rules (enhanced with bank accounts)
-INSERT INTO account_mapping_rules (rule_type, entity_code, document_type, transaction_type, debit_account, credit_account, priority, is_active) VALUES
-('TYPE', '*', 'BC', 'INTEREST', '1121114', '5154', 80, 1),
-('TYPE', '*', 'BC', 'TRANSFER', '1121114', '1311', 80, 1),
-('TYPE', '*', 'BN', 'FEE', '6278', '1121114', 80, 1),
-('TYPE', '*', 'BN', 'SALARY', '6411', '1121114', 80, 1),
-('TYPE', '*', 'BN', 'TAX', '3331', '1121114', 80, 1),
-('TYPE', '*', 'BN', 'UTILITY', '6278', '1121114', 80, 1),
-('TYPE', '*', 'BN', 'WITHDRAWAL', '1111', '1121114', 80, 1),
-('TYPE', '*', 'BN', 'TRANSFER', '6278', '1121114', 80, 1);
-
--- Default account rules (lowest priority - account extraction will override these)
-INSERT INTO account_mapping_rules (rule_type, entity_code, document_type, transaction_type, debit_account, credit_account, priority, is_active) VALUES
-('DEFAULT', '*', 'BC', '*', '1121114', '1311', 1, 1),
-('DEFAULT', '*', 'BN', '*', '6278', '1121114', 1, 1);
+-- Sample data for transaction_rules and account_mapping_rules has been removed
+-- These rules are now hardcoded in integrated_processor.py
 
 
 -- ============================================================================
@@ -294,15 +193,17 @@ DROP INDEX IF EXISTS idx_transactions_status;
 DROP INDEX IF EXISTS idx_mapping_transaction;
 DROP INDEX IF EXISTS idx_mapping_accounts;
 DROP INDEX IF EXISTS idx_mapping_document;
-DROP INDEX IF EXISTS idx_rules_pattern;
-DROP INDEX IF EXISTS idx_rules_priority;
-DROP INDEX IF EXISTS idx_rules_credit;
+-- Indexes removed for tables that no longer exist
+-- DROP INDEX IF EXISTS idx_rules_pattern;
+-- DROP INDEX IF EXISTS idx_rules_priority;
+-- DROP INDEX IF EXISTS idx_rules_credit;
 DROP INDEX IF EXISTS idx_accounts_parent;
 DROP INDEX IF EXISTS idx_departments_parent;
 DROP INDEX IF EXISTS idx_pos_department;
 DROP INDEX IF EXISTS idx_statements_dates;
-DROP INDEX IF EXISTS idx_acc_mapping_lookup;
-DROP INDEX IF EXISTS idx_acc_mapping_priority;
+-- Indexes removed for tables that no longer exist
+-- DROP INDEX IF EXISTS idx_acc_mapping_lookup;
+-- DROP INDEX IF EXISTS idx_acc_mapping_priority;
 DROP INDEX IF EXISTS idx_accounts_name_search;
 
 CREATE INDEX IF NOT EXISTS idx_transactions_date       ON transactions(transaction_date);
@@ -311,15 +212,17 @@ CREATE INDEX IF NOT EXISTS idx_transactions_status     ON transactions(status_co
 CREATE INDEX IF NOT EXISTS idx_mapping_transaction     ON transaction_mappings(transaction_id);
 CREATE INDEX IF NOT EXISTS idx_mapping_accounts        ON transaction_mappings(debit_account, credit_account);
 CREATE INDEX IF NOT EXISTS idx_mapping_document        ON transaction_mappings(document_type, document_number);
-CREATE INDEX IF NOT EXISTS idx_rules_pattern           ON transaction_rules(pattern);
-CREATE INDEX IF NOT EXISTS idx_rules_priority          ON transaction_rules(priority);
-CREATE INDEX IF NOT EXISTS idx_rules_credit            ON transaction_rules(is_credit, is_active);
+-- Indexes removed for tables that no longer exist
+-- CREATE INDEX IF NOT EXISTS idx_rules_pattern           ON transaction_rules(pattern);
+-- CREATE INDEX IF NOT EXISTS idx_rules_priority          ON transaction_rules(priority);
+-- CREATE INDEX IF NOT EXISTS idx_rules_credit            ON transaction_rules(is_credit, is_active);
 CREATE INDEX IF NOT EXISTS idx_accounts_parent         ON accounts(parent_code);
 CREATE INDEX IF NOT EXISTS idx_departments_parent      ON departments(parent_code);
 CREATE INDEX IF NOT EXISTS idx_pos_department          ON pos_machines(department_code);
 CREATE INDEX IF NOT EXISTS idx_statements_dates        ON bank_statements(account_number, start_date, end_date);
-CREATE INDEX IF NOT EXISTS idx_acc_mapping_lookup      ON account_mapping_rules(rule_type, entity_code, document_type);
-CREATE INDEX IF NOT EXISTS idx_acc_mapping_priority    ON account_mapping_rules(priority);
+-- Indexes removed for tables that no longer exist
+-- CREATE INDEX IF NOT EXISTS idx_acc_mapping_lookup      ON account_mapping_rules(rule_type, entity_code, document_type);
+-- CREATE INDEX IF NOT EXISTS idx_acc_mapping_priority    ON account_mapping_rules(priority);
 
 -- CRITICAL: Index for account name searching (enables fast account code extraction)
 CREATE INDEX IF NOT EXISTS idx_accounts_name_search    ON accounts(name);

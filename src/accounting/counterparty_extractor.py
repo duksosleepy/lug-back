@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 """
-Counterparty Extractor Module
+Enhanced Counterparty Extractor Module
 
-This module provides functionality to extract counterparty names from bank transaction
-descriptions. It uses pattern matching and fuzzy search to identify company names
-in complex transaction descriptions, especially when they follow specific patterns
-like "B/O", "F/O", "CTY", "CONG TY", etc.
+This module provides functionality to extract counterparty names, account numbers,
+and POS machine codes from bank transaction descriptions. It uses pattern matching
+and fuzzy search to identify entities in complex transaction descriptions.
+
+Enhanced to avoid redundant searches by detecting statement content type and
+searching in the appropriate index directly.
 """
 
 import re
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from tantivy import Filter, TextAnalyzerBuilder, Tokenizer
 
 from src.accounting.fast_search import (
+    search_accounts,
     search_counterparties,
+    search_departments,
+    search_pos_machines,
 )
 from src.util.logging import get_logger
 
@@ -31,8 +36,8 @@ vietnamese_analyzer = (
 
 class CounterpartyExtractor:
     """
-    Extracts counterparty names from bank transaction descriptions
-    using pattern matching and fuzzy search.
+    Enhanced extractor that detects and extracts entities from bank transaction descriptions
+    using pattern matching and fuzzy search, searching directly in the appropriate index.
     """
 
     def __init__(self, db_path: str = "banking_enterprise.db"):
@@ -118,6 +123,37 @@ class CounterpartyExtractor:
             ),
         ]
 
+        # Account number patterns
+        self.account_patterns = [
+            # Bank account numbers (10+ digits)
+            (r"\b(\d{10,})\b", "bank_account"),
+            # Account numbers with TK prefix
+            (r"TK\s+(\d{5,})", "account_ref"),
+            (r"STK\s+(\d{5,})", "account_ref"),
+            (r"TAI KHOAN\s+(\d{5,})", "account_ref"),
+            (r"SO TK\s+(\d{5,})", "account_ref"),
+            # BIDV specific patterns
+            (r"BIDV\s+(\d{4})", "bidv_account"),
+            # Transfer patterns
+            (r"TU\s+(?:TK\s+)?(\d{5,}).*?(?:DEN|QUA|SANG)", "from_account"),
+            (r"(?:DEN|QUA|SANG)\s+(?:TK\s+)?(\d{5,})", "to_account"),
+        ]
+
+        # POS machine patterns
+        self.pos_patterns = [
+            (r"POS\s*(\d{7,8})", "pos_code"),
+            (r"TT POS\s*(\d{7,8})", "pos_code"),
+            (r"THANH TOAN POS\s*(\d{7,8})", "pos_code"),
+        ]
+
+        # Department patterns
+        self.department_patterns = [
+            (r"BP\s*(\w{2,6})", "department_code"),
+            (r"BO PHAN\s*(\w{2,6})", "department_code"),
+            (r"MA BP\s*(\w{2,6})", "department_code"),
+            (r"PHONG BAN\s*(\w{2,6})", "department_code"),
+        ]
+
         # Specific ending words that might indicate the end of a company name
         self.company_end_markers = [
             r"TT",
@@ -174,6 +210,54 @@ class CounterpartyExtractor:
             "TAI",
             "CRM",
         ]
+
+    def extract_entity_info(self, description: str) -> Dict[str, List[Dict]]:
+        """
+        Extract all types of entities from a transaction description.
+        This is the main enhancement - a unified method to extract multiple entity types.
+
+        Args:
+            description: The transaction description text
+
+        Returns:
+            Dictionary with keys 'counterparties', 'accounts', 'pos_machines', 'departments'
+            each containing a list of extracted entities with relevant metadata
+        """
+        # Create result structure
+        results = {
+            "counterparties": [],
+            "accounts": [],
+            "pos_machines": [],
+            "departments": [],
+        }
+
+        # Save original case for person name extraction
+        original_desc = description
+
+        # Normalize description to uppercase for pattern matching
+        normalized_desc = description.upper()
+
+        # Extract counterparties
+        counterparties = self.extract_counterparties(description)
+        if counterparties:
+            results["counterparties"] = counterparties
+
+        # Extract account numbers
+        accounts = self._extract_accounts(normalized_desc)
+        if accounts:
+            results["accounts"] = accounts
+
+        # Extract POS machines
+        pos_machines = self._extract_pos_machines(normalized_desc)
+        if pos_machines:
+            results["pos_machines"] = pos_machines
+
+        # Extract departments
+        departments = self._extract_departments(normalized_desc)
+        if departments:
+            results["departments"] = departments
+
+        return results
 
     def extract_counterparties(self, description: str) -> List[Dict[str, str]]:
         """
@@ -314,6 +398,163 @@ class CounterpartyExtractor:
 
         return unique_counterparties
 
+    def _extract_accounts(self, description: str) -> List[Dict[str, Any]]:
+        """
+        Extract account numbers from a transaction description.
+
+        Args:
+            description: The normalized (uppercase) transaction description
+
+        Returns:
+            List of dicts with account info (code, type, position, confidence)
+        """
+        accounts = []
+        matched_spans = []
+
+        for pattern, acc_type in self.account_patterns:
+            for match in re.finditer(pattern, description):
+                code = match.group(1)
+                span = match.span()
+
+                # Check for overlap
+                overlap = False
+                for prev_span in matched_spans:
+                    if max(prev_span[0], span[0]) < min(prev_span[1], span[1]):
+                        overlap = True
+                        break
+
+                if not overlap and code:
+                    # Set confidence based on type
+                    confidence = (
+                        0.9
+                        if acc_type in ["bank_account", "account_ref"]
+                        else 0.8
+                    )
+
+                    accounts.append(
+                        {
+                            "code": code,
+                            "type": acc_type,
+                            "position": span[0],
+                            "confidence": confidence,
+                            "span": span,
+                        }
+                    )
+                    matched_spans.append(span)
+
+        # Sort by position in text
+        accounts.sort(key=lambda x: x["position"])
+
+        # Remove duplicate account numbers and span info
+        unique_accounts = []
+        seen_codes = set()
+
+        for account in accounts:
+            if account["code"] not in seen_codes:
+                seen_codes.add(account["code"])
+                account.pop("span", None)
+                unique_accounts.append(account)
+
+        return unique_accounts
+
+    def _extract_pos_machines(self, description: str) -> List[Dict[str, Any]]:
+        """
+        Extract POS machine codes from a transaction description.
+
+        Args:
+            description: The normalized (uppercase) transaction description
+
+        Returns:
+            List of dicts with POS info (code, type, position, confidence)
+        """
+        pos_machines = []
+        matched_spans = []
+
+        for pattern, pos_type in self.pos_patterns:
+            for match in re.finditer(pattern, description):
+                code = match.group(1)
+                span = match.span()
+
+                # Check for overlap
+                overlap = False
+                for prev_span in matched_spans:
+                    if max(prev_span[0], span[0]) < min(prev_span[1], span[1]):
+                        overlap = True
+                        break
+
+                if not overlap and code:
+                    pos_machines.append(
+                        {
+                            "code": code,
+                            "type": pos_type,
+                            "position": span[0],
+                            "confidence": 0.9,  # High confidence for POS codes
+                            "span": span,
+                        }
+                    )
+                    matched_spans.append(span)
+
+        # Remove duplicate POS codes and span info
+        unique_pos = []
+        seen_codes = set()
+
+        for pos in pos_machines:
+            if pos["code"] not in seen_codes:
+                seen_codes.add(pos["code"])
+                pos.pop("span", None)
+                unique_pos.append(pos)
+
+        return unique_pos
+
+    def _extract_departments(self, description: str) -> List[Dict[str, Any]]:
+        """
+        Extract department codes from a transaction description.
+
+        Args:
+            description: The normalized (uppercase) transaction description
+
+        Returns:
+            List of dicts with department info (code, type, position, confidence)
+        """
+        departments = []
+        matched_spans = []
+
+        for pattern, dept_type in self.department_patterns:
+            for match in re.finditer(pattern, description):
+                code = match.group(1)
+                span = match.span()
+
+                # Check for overlap
+                overlap = False
+                for prev_span in matched_spans:
+                    if max(prev_span[0], span[0]) < min(prev_span[1], span[1]):
+                        overlap = True
+                        break
+
+                if not overlap and code:
+                    departments.append(
+                        {
+                            "code": code,
+                            "type": dept_type,
+                            "position": span[0],
+                            "confidence": 0.8,  # Moderate confidence for department codes
+                            "span": span,
+                        }
+                    )
+                    matched_spans.append(span)
+
+        # Remove duplicate department codes and span info
+        unique_departments = []
+        seen_codes = set()
+
+        for dept in departments:
+            if dept["code"] not in seen_codes:
+                seen_codes.add(dept["code"])
+                dept.pop("span", None)
+                unique_departments.append(dept)
+
+        return unique_departments
+
     def _clean_company_name(self, name: str) -> str:
         """
         Clean and normalize a company name
@@ -436,6 +677,85 @@ class CounterpartyExtractor:
         # If it has a common surname or common syllable, it's more likely to be a valid name
         return True
 
+    def search_entities(
+        self, entity_info: Dict[str, List[Dict]]
+    ) -> Dict[str, List[Dict]]:
+        """
+        Search for all detected entities in their respective indexes.
+        This is a key enhancement that eliminates redundant searches.
+
+        Args:
+            entity_info: Dictionary with extracted entity info from extract_entity_info
+
+        Returns:
+            Dictionary with matched entities from database
+        """
+        results = {
+            "counterparties": [],
+            "accounts": [],
+            "pos_machines": [],
+            "departments": [],
+        }
+
+        # Search for counterparties
+        if entity_info.get("counterparties"):
+            for counterparty in entity_info["counterparties"]:
+                matches = search_counterparties(counterparty["name"], limit=2)
+                if matches:
+                    for match in matches:
+                        match["extracted_name"] = counterparty["name"]
+                        match["match_type"] = counterparty["type"]
+                        match["extraction_confidence"] = counterparty[
+                            "confidence"
+                        ]
+                        results["counterparties"].append(match)
+
+        # Search for accounts
+        if entity_info.get("accounts"):
+            for account in entity_info["accounts"]:
+                matches = search_accounts(
+                    account["code"], field_name="name", limit=2
+                )
+                if matches:
+                    for match in matches:
+                        match["extracted_code"] = account["code"]
+                        match["match_type"] = account["type"]
+                        match["extraction_confidence"] = account["confidence"]
+                        results["accounts"].append(match)
+
+        # Search for POS machines
+        if entity_info.get("pos_machines"):
+            for pos in entity_info["pos_machines"]:
+                matches = search_pos_machines(
+                    pos["code"], field_name="code", limit=2
+                )
+                if matches:
+                    for match in matches:
+                        match["extracted_code"] = pos["code"]
+                        match["extraction_confidence"] = pos["confidence"]
+                        results["pos_machines"].append(match)
+
+        # Search for departments
+        if entity_info.get("departments"):
+            for dept in entity_info["departments"]:
+                matches = search_departments(
+                    dept["code"], field_name="code", limit=2
+                )
+                if matches:
+                    for match in matches:
+                        match["extracted_code"] = dept["code"]
+                        match["extraction_confidence"] = dept["confidence"]
+                        results["departments"].append(match)
+
+        # Sort each category by score
+        for category in results:
+            if results[category]:
+                results[category].sort(
+                    key=lambda x: x.get("score", 0), reverse=True
+                )
+
+        return results
+
     def match_counterparty_in_db(
         self, name: str, max_results: int = 5
     ) -> List[Dict]:
@@ -491,3 +811,22 @@ class CounterpartyExtractor:
         # Return top results, sorted by score
         matched_results.sort(key=lambda x: x.get("score", 0), reverse=True)
         return matched_results[:max_results]
+
+    def extract_and_match_all(self, description: str) -> Dict[str, List[Dict]]:
+        """
+        Extract all entities from a description and match against appropriate databases.
+        This is the main entry point that should be used instead of multiple separate searches.
+
+        Args:
+            description: Transaction description
+
+        Returns:
+            Dictionary with matched entities from all relevant categories
+        """
+        # Extract all entity types from the description
+        entity_info = self.extract_entity_info(description)
+
+        # Search for matches in the appropriate indexes
+        matched_entities = self.search_entities(entity_info)
+
+        return matched_entities
