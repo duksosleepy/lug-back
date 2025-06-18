@@ -1,7 +1,6 @@
 import json
 import re
 from collections import OrderedDict
-from datetime import datetime
 from typing import Dict, Optional
 
 import httpx
@@ -119,17 +118,23 @@ async def initialize_cancel_reasons() -> bool:
     global _global_cancel_reasons_lookup
 
     logger.info("Initializing cancel reasons from API...")
-    
+
     cancel_reasons = await fetch_cancel_reasons_from_api()
-    
+
     if cancel_reasons is not None:
         _global_cancel_reasons_lookup = cancel_reasons
-        logger.info(f"Cancel reasons initialized successfully with {len(cancel_reasons)} entries")
+        logger.info(
+            f"Cancel reasons initialized successfully with {len(cancel_reasons)} entries"
+        )
         return True
     else:
-        logger.warning("Failed to fetch cancel reasons from API, will use fallback data")
+        logger.warning(
+            "Failed to fetch cancel reasons from API, will use fallback data"
+        )
         _global_cancel_reasons_lookup = get_fallback_cancel_reasons()
-        logger.info(f"Using fallback cancel reasons with {len(_global_cancel_reasons_lookup)} entries")
+        logger.info(
+            f"Using fallback cancel reasons with {len(_global_cancel_reasons_lookup)} entries"
+        )
         return False
 
 
@@ -182,11 +187,13 @@ def get_cancel_reasons_lookup() -> Dict[int, str]:
         Dict[int, str]: Mapping of cancellation reason ID to Vietnamese name
     """
     global _global_cancel_reasons_lookup
-    
+
     if _global_cancel_reasons_lookup is not None:
         return _global_cancel_reasons_lookup
     else:
-        logger.warning("Global cancel reasons not initialized, using fallback data")
+        logger.warning(
+            "Global cancel reasons not initialized, using fallback data"
+        )
         return get_fallback_cancel_reasons()
 
 
@@ -480,7 +487,10 @@ def process_page_data(
                         else "",
                     ),
                     ("Số lượng", 0),
-                    ("Lý do hủy đơn", cancel_reason),  # FIXED: Use proper cancel_reason
+                    (
+                        "Lý do hủy đơn",
+                        cancel_reason,
+                    ),  # FIXED: Use proper cancel_reason
                     (
                         "Ngày hủy đơn",
                         convert_to_gmt7(order.get("cancelled_on", "")),
@@ -532,7 +542,10 @@ def process_page_data(
                             else "",
                         ),
                         ("Số lượng", line_item.get("quantity", 0)),
-                        ("Lý do hủy đơn", cancel_reason),  # FIXED: Use proper cancel_reason
+                        (
+                            "Lý do hủy đơn",
+                            cancel_reason,
+                        ),  # FIXED: Use proper cancel_reason
                         (
                             "Ngày hủy đơn",
                             convert_to_gmt7(order.get("cancelled_on", "")),
