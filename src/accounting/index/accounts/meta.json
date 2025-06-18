@@ -5,7 +5,7 @@
   },
   "segments": [
     {
-      "segment_id": "bd39d618-35ec-44af-b40e-ccfdc0dff7f2",
+      "segment_id": "ffccb3d7-4bcc-43c6-b1ec-e5969d044965",
       "max_doc": 438,
       "deletes": null
     }
@@ -44,7 +44,7 @@
         "indexing": {
           "record": "position",
           "fieldnorms": true,
-          "tokenizer": "default"
+          "tokenizer": "vietnamese_normalized"
         },
         "stored": true,
         "fast": false

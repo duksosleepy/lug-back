@@ -17,46 +17,27 @@ from util.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Cache for cancel reasons to avoid repeated API calls
-_cancel_reasons_cache = {
-    "data": None,
-    "timestamp": None,
-    "ttl_minutes": 60,  # Cache for 60 minutes
-}
+# Global variable to store cancel reasons fetched at startup
+_global_cancel_reasons_lookup: Optional[Dict[int, str]] = None
 
 # Lấy cấu hình từ config_manager thay vì hardcode
 SPREADSHEET_ID = sapo_settings.spreadsheet_id
 RANGE_NAME = sapo_settings.data_range
 
 
-async def fetch_cancel_reasons() -> Optional[Dict[int, str]]:
+async def fetch_cancel_reasons_from_api() -> Optional[Dict[int, str]]:
     """
-    Fetch cancel reasons from the API with caching mechanism.
+    Fetch cancel reasons from the API without caching.
+    This function is called once at server startup.
 
     Returns:
         Dict[int, str]: Mapping of reason ID to reason name, or None if fetch fails
     """
-    global _cancel_reasons_cache
-
-    # Check if cache is still valid
-    if (
-        _cancel_reasons_cache["data"] is not None
-        and _cancel_reasons_cache["timestamp"] is not None
-    ):
-        cache_age = datetime.now() - _cancel_reasons_cache["timestamp"]
-        if (
-            cache_age.total_seconds()
-            < _cancel_reasons_cache["ttl_minutes"] * 60
-        ):
-            logger.debug("Using cached cancel reasons")
-            return _cancel_reasons_cache["data"]
-
-    # Fetch fresh data from API
     url = "https://congtysangtam.mysapogo.com/admin/reasons.json"
     headers = sapo_settings.get_mysapogo_com_headers()
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url, headers=headers)
             response.raise_for_status()
 
@@ -108,10 +89,6 @@ async def fetch_cancel_reasons() -> Optional[Dict[int, str]]:
                                 f"Invalid reason format: {key} -> {value}"
                             )
 
-            # Update cache
-            _cancel_reasons_cache["data"] = cancel_reasons_lookup
-            _cancel_reasons_cache["timestamp"] = datetime.now()
-
             logger.info(
                 f"Successfully processed {len(cancel_reasons_lookup)} cancel reasons"
             )
@@ -131,55 +108,29 @@ async def fetch_cancel_reasons() -> Optional[Dict[int, str]]:
     return None
 
 
-async def refresh_cancel_reasons_cache() -> Optional[Dict[int, str]]:
+async def initialize_cancel_reasons() -> bool:
     """
-    Force refresh the cancel reasons cache by bypassing the TTL check.
+    Initialize cancel reasons at server startup.
+    This function should be called once when the server starts.
 
     Returns:
-        Dict[int, str]: Fresh cancel reasons data, or None if fetch fails
+        bool: True if initialization successful, False otherwise
     """
-    global _cancel_reasons_cache
+    global _global_cancel_reasons_lookup
 
-    # Clear the cache to force a fresh fetch
-    _cancel_reasons_cache["data"] = None
-    _cancel_reasons_cache["timestamp"] = None
-
-    logger.info("Forcing refresh of cancel reasons cache")
-    return await fetch_cancel_reasons()
-
-
-def get_cancel_reasons_cache_info() -> Dict[str, any]:
-    """
-    Get information about the current cancel reasons cache status.
-
-    Returns:
-        Dict containing cache status information
-    """
-    global _cancel_reasons_cache
-
-    if _cancel_reasons_cache["timestamp"] is None:
-        return {
-            "cached": False,
-            "data_count": 0,
-            "cache_age_minutes": None,
-            "expires_in_minutes": None,
-        }
-
-    cache_age = datetime.now() - _cancel_reasons_cache["timestamp"]
-    cache_age_minutes = cache_age.total_seconds() / 60
-    expires_in_minutes = (
-        _cancel_reasons_cache["ttl_minutes"] - cache_age_minutes
-    )
-
-    return {
-        "cached": True,
-        "data_count": len(_cancel_reasons_cache["data"])
-        if _cancel_reasons_cache["data"]
-        else 0,
-        "cache_age_minutes": round(cache_age_minutes, 2),
-        "expires_in_minutes": round(max(0, expires_in_minutes), 2),
-        "is_expired": expires_in_minutes <= 0,
-    }
+    logger.info("Initializing cancel reasons from API...")
+    
+    cancel_reasons = await fetch_cancel_reasons_from_api()
+    
+    if cancel_reasons is not None:
+        _global_cancel_reasons_lookup = cancel_reasons
+        logger.info(f"Cancel reasons initialized successfully with {len(cancel_reasons)} entries")
+        return True
+    else:
+        logger.warning("Failed to fetch cancel reasons from API, will use fallback data")
+        _global_cancel_reasons_lookup = get_fallback_cancel_reasons()
+        logger.info(f"Using fallback cancel reasons with {len(_global_cancel_reasons_lookup)} entries")
+        return False
 
 
 def get_fallback_cancel_reasons() -> Dict[int, str]:
@@ -222,9 +173,26 @@ def get_fallback_cancel_reasons() -> Dict[int, str]:
     }
 
 
+def get_cancel_reasons_lookup() -> Dict[int, str]:
+    """
+    Get the current cancel reasons lookup table.
+    Uses global variable if available, otherwise returns fallback data.
+
+    Returns:
+        Dict[int, str]: Mapping of cancellation reason ID to Vietnamese name
+    """
+    global _global_cancel_reasons_lookup
+    
+    if _global_cancel_reasons_lookup is not None:
+        return _global_cancel_reasons_lookup
+    else:
+        logger.warning("Global cancel reasons not initialized, using fallback data")
+        return get_fallback_cancel_reasons()
+
+
 async def create_lookup_tables():
     """
-    Create efficient lookup tables from static data and API calls.
+    Create efficient lookup tables from static data and global cancel reasons.
 
     Returns:
         tuple: (order_sources_lookup, accounts_lookup, cancel_reasons_lookup)
@@ -294,17 +262,11 @@ async def create_lookup_tables():
         146761: "LUG",
     }
 
-    # Try to fetch cancel reasons from API, fallback to hardcoded values
-    cancel_reasons_lookup = await fetch_cancel_reasons()
-    if cancel_reasons_lookup is None:
-        logger.warning(
-            "Failed to fetch cancel reasons from API, using fallback data"
-        )
-        cancel_reasons_lookup = get_fallback_cancel_reasons()
-    else:
-        logger.info(
-            f"Successfully loaded {len(cancel_reasons_lookup)} cancel reasons from API"
-        )
+    # Use global cancel reasons lookup
+    cancel_reasons_lookup = get_cancel_reasons_lookup()
+    logger.info(
+        f"Using cancel reasons lookup with {len(cancel_reasons_lookup)} entries"
+    )
 
     return order_sources_lookup, accounts_lookup, cancel_reasons_lookup
 
@@ -472,6 +434,12 @@ def process_page_data(
                 if sales_value is not None:
                     total_sales = int(round(float(sales_value)))
 
+        # FIXED: Get cancel reason with proper fallback to empty string
+        reason_cancel_id = order.get("reason_cancel_id")
+        cancel_reason = ""
+        if reason_cancel_id is not None:
+            cancel_reason = cancel_reasons_lookup.get(reason_cancel_id, "")
+
         line_items = order.get("order_line_items", []) or []
         if not line_items:
             item_info = OrderedDict(
@@ -512,14 +480,7 @@ def process_page_data(
                         else "",
                     ),
                     ("Số lượng", 0),
-                    (
-                        "Lý do hủy đơn",
-                        # Convert cancellation reason ID to readable name, fallback to ID if not found
-                        cancel_reasons_lookup.get(
-                            order.get("reason_cancel_id"),
-                            order.get("reason_cancel_id", ""),
-                        ),
-                    ),
+                    ("Lý do hủy đơn", cancel_reason),  # FIXED: Use proper cancel_reason
                     (
                         "Ngày hủy đơn",
                         convert_to_gmt7(order.get("cancelled_on", "")),
@@ -571,14 +532,7 @@ def process_page_data(
                             else "",
                         ),
                         ("Số lượng", line_item.get("quantity", 0)),
-                        (
-                            "Lý do hủy đơn",
-                            # Convert cancellation reason ID to readable name, fallback to ID if not found
-                            cancel_reasons_lookup.get(
-                                order.get("reason_cancel_id"),
-                                order.get("reason_cancel_id", ""),
-                            ),
-                        ),
+                        ("Lý do hủy đơn", cancel_reason),  # FIXED: Use proper cancel_reason
                         (
                             "Ngày hủy đơn",
                             convert_to_gmt7(order.get("cancelled_on", "")),

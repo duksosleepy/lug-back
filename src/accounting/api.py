@@ -539,7 +539,7 @@ async def process_bank_statement(file: UploadFile):
                 )
 
                 # Create output filename
-                output_filename = f"{Path(file.filename).stem}_processed.xlsx"
+                output_filename = f"{Path(file.filename).stem}_processed.xls"
 
                 # Return success response
                 return AccountingResponse(

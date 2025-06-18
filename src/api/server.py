@@ -34,6 +34,25 @@ app = FastAPI(
 # Configure FastAPI with Loguru logging middleware
 setup_fastapi_logging(app)
 
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize application data on startup."""
+    logger.info("Initializing application startup tasks...")
+    
+    # Initialize cancel reasons for mysapogo.com sync
+    try:
+        from sapo_sync.mysapogo_com import initialize_cancel_reasons
+        success = await initialize_cancel_reasons()
+        if success:
+            logger.info("Cancel reasons initialized successfully from API")
+        else:
+            logger.warning("Cancel reasons initialized using fallback data")
+    except Exception as e:
+        logger.error(f"Failed to initialize cancel reasons: {str(e)}", exc_info=True)
+    
+    logger.info("Application startup completed")
+
 origins = app_settings.cors_origins
 
 app.add_middleware(
