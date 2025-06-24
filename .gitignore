@@ -31,3 +31,4 @@ wheels/
 /src/accounting/saoke.ods
 /src/accounting/trace.log
 /src/accounting/test.db-wal
+/src/accounting/index/

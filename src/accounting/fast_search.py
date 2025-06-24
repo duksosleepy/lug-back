@@ -109,7 +109,7 @@ def search_counterparties(query_text, field_name="name", limit=10):
         return []
 
 
-def search_exact_counterparties(query_text, field_name="name", limit=100):
+def search_exact_counterparties(query_text, field_name="name", limit=10):
     """Search counterparties by name or other fields"""
     logger.info(
         f"Searching counterparties for '{query_text}' in field '{field_name}'"
