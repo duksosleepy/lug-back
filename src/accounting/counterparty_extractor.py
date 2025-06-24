@@ -13,25 +13,16 @@ searching in the appropriate index directly.
 import re
 from typing import Any, Dict, List
 
-from tantivy import Filter, TextAnalyzerBuilder, Tokenizer
-
 from src.accounting.fast_search import (
     search_accounts,
     search_counterparties,
     search_departments,
+    search_exact_counterparties,
     search_pos_machines,
 )
 from src.util.logging import get_logger
 
 logger = get_logger(__name__)
-
-# Create custom analyzer with ASCII folding for Vietnamese text
-vietnamese_analyzer = (
-    TextAnalyzerBuilder(Tokenizer.simple())
-    .filter(Filter.ascii_fold())
-    .filter(Filter.lowercase())
-    .build()
-)
 
 
 class CounterpartyExtractor:
@@ -44,6 +35,43 @@ class CounterpartyExtractor:
         """Initialize the extractor"""
         self.db_path = db_path
         self.logger = logger
+
+        # Business entity indicators to remove from counterparty names
+        self.business_entity_indicators = [
+            # Vietnamese indicators
+            "CTY",
+            "CONG TY",
+            "TNHH",
+            "CO PHAN",
+            "CP",
+            "TONG CONG TY",
+            "CONG TY TNHH",
+            "CONG TY CO PHAN",
+            # English indicators
+            "JSC",
+            "LLC",
+            "INC",
+            "CORP",
+            "CORPORATION",
+            "LTD",
+            "LIMITED",
+            "COMPANY",
+            "ENTERPRISE",
+            "GROUP",
+            # Vietnamese variations
+            "DOANH NGHIEP",
+            "TONG CONG NGHI",
+            "CONG NGHI",
+        ]
+
+        # Department code replacement mapping for counterparty search
+        # This allows mapping of short codes to full names for better matching
+        self.department_code_replacements = {
+            "BRVT": "BARIA",
+            "CTHO": "CANTHO",
+            # Add more mappings here in the future as needed
+            # "SHORT": "FULL_NAME",
+        }
 
         # Common patterns where counterparty names appear
         self.counterparty_patterns = [
@@ -211,6 +239,96 @@ class CounterpartyExtractor:
             "CRM",
         ]
 
+    def clean_counterparty_name(self, name: str) -> str:
+        """
+        Clean counterparty name by removing business entity indicators and common words.
+
+        This function removes:
+        - Business entity indicators (CTY, TNHH, CO PHAN, etc.)
+        - Extra whitespace and formatting
+        - Common transaction-related words
+
+        Args:
+            name: Raw counterparty name
+
+        Returns:
+            Cleaned counterparty name
+        """
+        if not name or not isinstance(name, str):
+            return name
+
+        # Start with the original name
+        cleaned = name.strip().upper()
+
+        # Log the original name for debugging
+        self.logger.debug(f"Cleaning counterparty name: '{name}'")
+
+        # Remove business entity indicators from the beginning and end
+        for indicator in sorted(
+            self.business_entity_indicators, key=len, reverse=True
+        ):
+            # Remove from beginning (with word boundary)
+            pattern_start = rf"^{re.escape(indicator)}\s+"
+            cleaned = re.sub(pattern_start, "", cleaned)
+
+            # Remove from end (with word boundary)
+            pattern_end = rf"\s+{re.escape(indicator)}$"
+            cleaned = re.sub(pattern_end, "", cleaned)
+
+            # Remove standalone indicators between spaces
+            pattern_standalone = rf"\s+{re.escape(indicator)}\s+"
+            cleaned = re.sub(pattern_standalone, " ", cleaned)
+
+        # Remove stopwords that might interfere with the business name
+        for stopword in self.stopwords:
+            # Remove stopwords at the beginning or end
+            pattern_start = rf"^{re.escape(stopword)}\s+"
+            cleaned = re.sub(pattern_start, "", cleaned, flags=re.IGNORECASE)
+
+            pattern_end = rf"\s+{re.escape(stopword)}$"
+            cleaned = re.sub(pattern_end, "", cleaned, flags=re.IGNORECASE)
+
+        # Clean up extra whitespace and special characters
+        cleaned = re.sub(
+            r"\s+", " ", cleaned
+        )  # Multiple spaces to single space
+        cleaned = re.sub(r"^[\s\-_,.:;]+", "", cleaned)  # Leading punctuation
+        cleaned = re.sub(r"[\s\-_,.:;]+$", "", cleaned)  # Trailing punctuation
+        cleaned = cleaned.strip()
+
+        # Ensure we don't return an empty string
+        if not cleaned:
+            # If cleaning removed everything, use a more conservative approach
+            cleaned = name.strip()
+            # Just remove the most common indicators
+            for indicator in ["CTY", "CONG TY", "TNHH", "CO PHAN"]:
+                cleaned = re.sub(
+                    rf"^{re.escape(indicator)}\s+",
+                    "",
+                    cleaned,
+                    flags=re.IGNORECASE,
+                )
+                cleaned = re.sub(
+                    rf"\s+{re.escape(indicator)}$",
+                    "",
+                    cleaned,
+                    flags=re.IGNORECASE,
+                )
+            cleaned = cleaned.strip()
+
+        # Final check - if still empty, return original
+        if not cleaned:
+            cleaned = name.strip()
+
+        # Convert to title case for better readability
+        cleaned = cleaned.title()
+
+        # Log the result
+        if cleaned != name:
+            self.logger.debug(f"Cleaned '{name}' -> '{cleaned}'")
+
+        return cleaned
+
     def extract_entity_info(self, description: str) -> Dict[str, List[Dict]]:
         """
         Extract all types of entities from a transaction description.
@@ -297,14 +415,16 @@ class CounterpartyExtractor:
                         break
 
                 if not overlap:
-                    # Keep original capitalization for person names
+                    # Keep original capitalization for person names but clean them
                     name = name.strip()
 
                     # Validate that this is a person name
                     if self._is_valid_person_name(name):
+                        # Clean person names (less aggressive than company names)
+                        cleaned_name = self._clean_person_name(name)
                         counterparties.append(
                             {
-                                "name": name,
+                                "name": cleaned_name,
                                 "type": "person",
                                 "confidence": 0.9,  # High confidence for person name match
                                 "span": span,
@@ -334,11 +454,11 @@ class CounterpartyExtractor:
                         break
 
                 if not overlap:
-                    # Clean up the extracted name
-                    cleaned_name = self._clean_company_name(name)
+                    # Clean up the extracted company name using the new cleaning function
+                    cleaned_name = self.clean_counterparty_name(name)
                     if (
-                        cleaned_name and len(cleaned_name) > 5
-                    ):  # Minimum length to be considered valid
+                        cleaned_name and len(cleaned_name) > 3
+                    ):  # Minimum length to be considered valid after cleaning
                         counterparties.append(
                             {
                                 "name": cleaned_name,
@@ -367,9 +487,9 @@ class CounterpartyExtractor:
                                 end_pos = marker_pos
 
                     potential_name = normalized_desc[start_pos:end_pos].strip()
-                    cleaned_name = self._clean_company_name(potential_name)
+                    cleaned_name = self.clean_counterparty_name(potential_name)
 
-                    if cleaned_name and len(cleaned_name) > 5:
+                    if cleaned_name and len(cleaned_name) > 3:
                         counterparties.append(
                             {
                                 "name": cleaned_name,
@@ -397,6 +517,29 @@ class CounterpartyExtractor:
                 unique_counterparties.append(party)
 
         return unique_counterparties
+
+    def _clean_person_name(self, name: str) -> str:
+        """
+        Clean person names with less aggressive cleaning than company names
+
+        Args:
+            name: Raw person name
+
+        Returns:
+            Cleaned person name
+        """
+        if not name or not isinstance(name, str):
+            return name
+
+        # Just clean up whitespace and basic formatting for person names
+        cleaned = name.strip()
+        cleaned = re.sub(
+            r"\s+", " ", cleaned
+        )  # Multiple spaces to single space
+        cleaned = re.sub(r"^[\s\-_,.:;]+", "", cleaned)  # Leading punctuation
+        cleaned = re.sub(r"[\s\-_,.:;]+$", "", cleaned)  # Trailing punctuation
+
+        return cleaned.strip()
 
     def _extract_accounts(self, description: str) -> List[Dict[str, Any]]:
         """
@@ -557,7 +700,7 @@ class CounterpartyExtractor:
 
     def _clean_company_name(self, name: str) -> str:
         """
-        Clean and normalize a company name
+        Clean and normalize a company name (legacy method, use clean_counterparty_name instead)
 
         Args:
             name: Raw company name extracted from text
@@ -565,17 +708,8 @@ class CounterpartyExtractor:
         Returns:
             Cleaned company name
         """
-        # Remove any leading/trailing whitespace
-        cleaned = name.strip()
-
-        # Remove stop words and common prefixes/suffixes
-        for word in self.stopwords:
-            cleaned = re.sub(r"\b" + word + r"\b", "", cleaned)
-
-        # Replace multiple spaces with a single space
-        cleaned = re.sub(r"\s+", " ", cleaned).strip()
-
-        return cleaned
+        # Use the new cleaning function for consistency
+        return self.clean_counterparty_name(name)
 
     def _is_valid_person_name(self, name: str) -> bool:
         """
@@ -605,37 +739,6 @@ class CounterpartyExtractor:
         if not all(part[0].isupper() for part in parts if part):
             return False
 
-        # Check for common Vietnamese family names, but don't require it
-        # as we might encounter less common surnames
-        common_surnames = [
-            "Nguyen",
-            "Tran",
-            "Le",
-            "Pham",
-            "Hoang",
-            "Huynh",
-            "Phan",
-            "Vu",
-            "Vo",
-            "Bui",
-            "Do",
-            "Ho",
-            "Ngo",
-            "Duong",
-            "Ly",
-            "Dang",
-            "Truong",
-            "Dinh",
-            "Mai",
-            "Trinh",
-            "Ha",
-        ]
-
-        # If first word is a common surname, increase confidence
-        has_common_surname = any(
-            parts[0] == surname for surname in common_surnames
-        )
-
         # Check if the name contains any company indicators
         company_indicators = [
             "CTY",
@@ -658,23 +761,6 @@ class CounterpartyExtractor:
         if any(char.isdigit() for char in name):
             return False
 
-        # Check for common Vietnamese syllables in names
-        vietnamese_syllables = [
-            "Thi",
-            "Van",
-            "Minh",
-            "Thanh",
-            "Tuan",
-            "Anh",
-            "Duc",
-            "Thao",
-            "Hung",
-        ]
-        has_common_syllable = any(
-            syllable in parts for syllable in vietnamese_syllables
-        )
-
-        # If it has a common surname or common syllable, it's more likely to be a valid name
         return True
 
     def search_entities(
@@ -683,6 +769,7 @@ class CounterpartyExtractor:
         """
         Search for all detected entities in their respective indexes.
         This is a key enhancement that eliminates redundant searches.
+        Implements proper two-condition logic for counterparties.
 
         Args:
             entity_info: Dictionary with extracted entity info from extract_entity_info
@@ -697,18 +784,47 @@ class CounterpartyExtractor:
             "departments": [],
         }
 
-        # Search for counterparties
+        # Search for counterparties with two-condition logic
         if entity_info.get("counterparties"):
             for counterparty in entity_info["counterparties"]:
-                matches = search_counterparties(counterparty["name"], limit=2)
-                if matches:
+                extracted_name = counterparty["name"]
+                self.logger.info(
+                    f"Searching for counterparty: '{extracted_name}'"
+                )
+
+                matches = search_counterparties(extracted_name, limit=2)
+
+                if matches and matches[0].get("code"):
+                    # Condition 1: Found in index - get code, name, address
                     for match in matches:
-                        match["extracted_name"] = counterparty["name"]
+                        match["extracted_name"] = extracted_name
                         match["match_type"] = counterparty["type"]
                         match["extraction_confidence"] = counterparty[
                             "confidence"
                         ]
+                        match["search_condition"] = "found_in_index"
                         results["counterparties"].append(match)
+                        self.logger.info(
+                            f"Condition 1: Found counterparty '{extracted_name}' in index with code: {match['code']}"
+                        )
+                else:
+                    # Condition 2: Not found in index - return extracted name with null code/address
+                    not_found_result = {
+                        "extracted_name": extracted_name,
+                        "name": extracted_name,
+                        "code": None,
+                        "address": None,
+                        "phone": None,
+                        "tax_id": None,
+                        "match_type": counterparty["type"],
+                        "extraction_confidence": counterparty["confidence"],
+                        "search_condition": "not_found_in_index",
+                        "score": 0.0,
+                    }
+                    results["counterparties"].append(not_found_result)
+                    self.logger.info(
+                        f"Condition 2: Counterparty '{extracted_name}' not found in index, using extracted name with null code/address"
+                    )
 
         # Search for accounts
         if entity_info.get("accounts"):
@@ -811,6 +927,293 @@ class CounterpartyExtractor:
         # Return top results, sorted by score
         matched_results.sort(key=lambda x: x.get("score", 0), reverse=True)
         return matched_results[:max_results]
+
+    def clean_department_code(self, department_code: str) -> str:
+        """
+        Clean department code for counterparty search.
+
+        Process:
+        1. Split by "-" (if no "-", try "_")
+        2. Take the last element
+        3. Remove spaces
+        4. Apply text replacements (e.g., BRVT -> BARIA)
+
+        Example: "DD.TINH_GO BRVT1" -> split by "_" -> ["DD.TINH", "GO BRVT1"] -> take last -> "GO BRVT1" -> remove space -> "GOBRVT1" -> replace -> "GOBARIA1"
+
+        Args:
+            department_code: Raw department code from POS machine
+
+        Returns:
+            Cleaned and mapped department code for counterparty search
+        """
+        if not department_code or not isinstance(department_code, str):
+            return department_code
+
+        original_code = department_code.strip()
+        self.logger.debug(f"Cleaning department code: '{original_code}'")
+
+        # Step 1: Try splitting by "-" first
+        if "-" in original_code:
+            parts = original_code.split("-")
+        # If no "-", try splitting by "_"
+        elif "_" in original_code:
+            parts = original_code.split("_")
+        # If no separators, use the original code
+        else:
+            parts = [original_code]
+
+        # Step 2: Take the last element
+        last_element = parts[-1].strip() if parts else original_code
+
+        # Step 3: Remove spaces
+        no_spaces = re.sub(r"\s+", "", last_element)
+
+        # Step 4: Apply text replacements
+        final_code = no_spaces
+        for old_text, new_text in self.department_code_replacements.items():
+            if old_text in final_code:
+                final_code = final_code.replace(old_text, new_text)
+                self.logger.debug(
+                    f"Applied replacement: '{old_text}' -> '{new_text}'"
+                )
+
+        self.logger.debug(
+            f"Cleaned department code: '{original_code}' -> '{final_code}'"
+        )
+
+        return final_code
+
+    def handle_pos_machine_counterparty_logic(
+        self, extracted_pos_machines: List[Dict]
+    ) -> Dict[str, any]:
+        """
+        Implement NEW POS machine counterparty logic:
+        1. Get POS machine code and search in pos_machines index
+        2. Get "department_code" from POS machine record
+        3. Clean department_code (split by "-" or "_", take last element, remove spaces)
+        4. Search counterparties by cleaned code using "code" field
+        5. Return counterparty code, name, address
+
+        Args:
+            extracted_pos_machines: List of POS machines from search_entities
+
+        Returns:
+            Dictionary with counterparty info found via POS machine logic
+        """
+        if not extracted_pos_machines:
+            return None
+
+        # Get the best POS machine match (first one, highest score)
+        best_pos_match = extracted_pos_machines[0]
+        pos_code = best_pos_match.get("extracted_code") or best_pos_match.get(
+            "code"
+        )
+
+        if not pos_code:
+            self.logger.warning("No POS code found in POS machine match")
+            return None
+
+        self.logger.info(
+            f"Processing NEW POS machine logic for code: {pos_code}"
+        )
+
+        # Step 1: Get POS machine details (department_code)
+        pos_department_code = best_pos_match.get("department_code")
+
+        if not pos_department_code:
+            self.logger.warning(
+                f"No department_code found for POS machine {pos_code}"
+            )
+            return None
+
+        self.logger.info(
+            f"POS machine {pos_code} - Raw department_code: '{pos_department_code}'"
+        )
+
+        # Step 2: Clean the department code
+        cleaned_dept_code = self.clean_department_code(pos_department_code)
+
+        if not cleaned_dept_code:
+            self.logger.warning(
+                f"Department code cleaning resulted in empty string for: '{pos_department_code}'"
+            )
+            return None
+
+        self.logger.info(
+            f"Cleaned department code: '{pos_department_code}' -> '{cleaned_dept_code}'"
+        )
+
+        # Step 3: Search counterparties by cleaned department code
+
+        # Search for counterparty with the cleaned department code
+        counterparty_matches = search_exact_counterparties(
+            cleaned_dept_code, field_name="code", limit=5
+        )
+
+        if not counterparty_matches:
+            self.logger.info(
+                f"No counterparties found with code: '{cleaned_dept_code}'"
+            )
+            return None
+
+        self.logger.info(
+            f"Found {len(counterparty_matches)} counterparties with code '{cleaned_dept_code}'"
+        )
+
+        # Step 4: Return the best counterparty match
+        best_counterparty = counterparty_matches[0]  # Highest score
+
+        result = {
+            "code": best_counterparty["code"],
+            "name": self.clean_counterparty_name(best_counterparty["name"]),
+            "address": best_counterparty.get("address") or "",
+            "phone": best_counterparty.get("phone") or "",
+            "tax_id": best_counterparty.get("tax_id") or "",
+            "source": "pos_machine_lookup",
+            "condition_applied": "pos_machine_counterparty_logic_new",
+            "pos_code": pos_code,
+            "pos_department_code": pos_department_code,
+            "cleaned_department_code": cleaned_dept_code,
+        }
+
+        self.logger.info(
+            f"NEW POS machine logic result: Found counterparty '{result['name']}' (code: {result['code']}) "
+            f"for POS {pos_code} using cleaned department code '{cleaned_dept_code}'"
+        )
+
+        return result
+
+    def handle_counterparty_with_all_logic(
+        self, extracted_entities: Dict[str, List[Dict]]
+    ) -> Dict[str, any]:
+        """
+        Unified counterparty handling that includes:
+        1. POS machine logic (if POS machines detected)
+        2. Two-condition logic for regular counterparties
+        3. Fallback to default
+
+        Args:
+            extracted_entities: All extracted entities from extract_and_match_all
+
+        Returns:
+            Dictionary with final counterparty info
+        """
+        # Priority 1: Check for POS machine logic
+        extracted_pos_machines = extracted_entities.get("pos_machines", [])
+        if extracted_pos_machines:
+            self.logger.info("Applying POS machine counterparty logic")
+            pos_result = self.handle_pos_machine_counterparty_logic(
+                extracted_pos_machines
+            )
+            if pos_result:
+                return pos_result
+            else:
+                self.logger.info(
+                    "POS machine logic failed, falling back to regular counterparty logic"
+                )
+
+        # Priority 2: Regular counterparty two-condition logic
+        extracted_counterparties = extracted_entities.get("counterparties", [])
+        if extracted_counterparties:
+            self.logger.info(
+                "Applying regular counterparty two-condition logic"
+            )
+            return self.handle_counterparty_two_conditions(
+                extracted_counterparties
+            )
+
+        # Priority 3: Fallback to default
+        self.logger.info(
+            "No counterparties or POS machines found, using default"
+        )
+        return {
+            "code": "KL",
+            "name": "Khách Lẻ Không Lấy Hóa Đơn",
+            "address": "",
+            "source": "default",
+            "condition_applied": "no_extraction",
+        }
+
+    def handle_counterparty_two_conditions(
+        self, extracted_counterparties: List[Dict]
+    ) -> Dict[str, any]:
+        """
+        Implement the explicit two-condition business logic for counterparty handling.
+        Now includes counterparty name cleaning for better results.
+
+        Condition 1: If counterparty found in index, get code, name, address
+        Condition 2: If not found, return extracted name with null code/address
+
+        Args:
+            extracted_counterparties: List of counterparties from search_entities
+
+        Returns:
+            Dictionary with counterparty info based on business conditions
+        """
+        if not extracted_counterparties:
+            return {
+                "code": "KL",  # Default customer code
+                "name": "Khách Lẻ Không Lấy Hóa Đơn",
+                "address": "",
+                "source": "default",
+                "condition_applied": "no_extraction",
+            }
+
+        # Get the best match (first one, highest score)
+        best_match = extracted_counterparties[0]
+
+        if best_match.get(
+            "search_condition"
+        ) == "found_in_index" and best_match.get("code"):
+            # Condition 1: Found in index
+            # Clean the name from database as well for consistency
+            db_name = best_match.get("name", "")
+            cleaned_db_name = (
+                self.clean_counterparty_name(db_name) if db_name else db_name
+            )
+
+            result = {
+                "code": best_match["code"],
+                "name": cleaned_db_name
+                or db_name,  # Use cleaned name if available
+                "address": best_match.get("address") or "",
+                "phone": best_match.get("phone") or "",
+                "tax_id": best_match.get("tax_id") or "",
+                "source": "database",
+                "condition_applied": "found_in_index",
+                "extraction_confidence": best_match.get(
+                    "extraction_confidence", 0
+                ),
+                "match_type": best_match.get("match_type", "unknown"),
+            }
+            self.logger.info(
+                f"Applied Condition 1: Found '{result['name']}' with code '{result['code']}' in database"
+            )
+            return result
+        else:
+            # Condition 2: Not found in index, use extracted name with null code/address
+            extracted_name = best_match.get("extracted_name") or best_match.get(
+                "name"
+            )
+            # The extracted name should already be cleaned during extraction
+
+            result = {
+                "code": None,
+                "name": extracted_name,
+                "address": None,
+                "phone": None,
+                "tax_id": None,
+                "source": "extracted",
+                "condition_applied": "not_found_in_index",
+                "extraction_confidence": best_match.get(
+                    "extraction_confidence", 0
+                ),
+                "match_type": best_match.get("match_type", "unknown"),
+            }
+            self.logger.info(
+                f"Applied Condition 2: Using extracted name '{result['name']}' with null code/address"
+            )
+            return result
 
     def extract_and_match_all(self, description: str) -> Dict[str, List[Dict]]:
         """

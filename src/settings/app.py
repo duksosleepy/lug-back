@@ -29,7 +29,7 @@ class AppSettings(BaseSettings):
         self.cors_origins = self._parse_cors_origins()
 
         # Upload settings
-        self.allowed_extensions = {".xlsx", ".xls"}
+        self.allowed_extensions = {".xlsx", ".xls", ".ods"}
 
         # Lấy cấu hình error notification emails
         self.error_notification_emails = self._get_error_notification_emails()

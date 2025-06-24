@@ -360,6 +360,48 @@ async def process_bank_statement(file: UploadFile):
                 )
 
             try:
+                # First identify bank from filename if available
+                if file and file.filename:
+                    # Extract bank name from filename (e.g., BIDV from 'BIDV 3840.ods')
+                    bank_name = processor.extract_bank_from_filename(
+                        file.filename
+                    )
+                    if bank_name:
+                        bank_info = processor.get_bank_info_by_name(bank_name)
+                        if bank_info:
+                            processor.current_bank_name = bank_info.get(
+                                "short_name", ""
+                            )
+                            processor.current_bank_info = bank_info
+                            logger.info(
+                                f"Identified bank {processor.current_bank_name} from filename"
+                            )
+                        else:
+                            logger.warning(
+                                f"Could not find bank info for '{bank_name}' from filename"
+                            )
+                    else:
+                        logger.warning(
+                            f"Could not extract bank name from filename: {file.filename}"
+                        )
+                else:
+                    logger.warning("No filename available to identify bank")
+
+                # Log the bank information that will be used throughout the process
+                if processor.current_bank_name:
+                    logger.info(f"Using bank: {processor.current_bank_name}")
+                    if processor.current_bank_info:
+                        logger.info(
+                            f"Bank full name: {processor.current_bank_info.get('name')}"
+                        )
+                        logger.info(
+                            f"Bank address: {processor.current_bank_info.get('address')}"
+                        )
+                else:
+                    logger.warning(
+                        "No bank information available for this file"
+                    )
+
                 # Step 1: Read the raw Excel file - KEEP ORIGINAL EXTRACTION LOGIC
                 logger.info(f"Reading Excel file: {file.filename}")
 
@@ -468,16 +510,103 @@ async def process_bank_statement(file: UploadFile):
                         continue
 
                 # Process each transaction using the processor's account determination logic
-                for transaction in raw_transactions:
-                    entry = processor.process_transaction(transaction)
-                    if entry:
-                        saoke_entries.append(entry.as_dict())
+                processed_count = 0
+                failed_count = 0
+
+                for i, transaction in enumerate(raw_transactions):
+                    try:
+                        entry = processor.process_transaction(transaction)
+                        if entry:
+                            saoke_entries.append(entry.as_dict())
+                            processed_count += 1
+                        else:
+                            failed_count += 1
+                            logger.warning(
+                                f"Failed to process transaction {i + 1}: {transaction.reference}"
+                            )
+                    except Exception as e:
+                        failed_count += 1
+                        logger.error(
+                            f"Error processing transaction {i + 1} ({transaction.reference}): {e}"
+                        )
+                        continue
+
+                logger.info(
+                    f"Transaction processing complete: {processed_count} successful, {failed_count} failed"
+                )
 
                 # Create a DataFrame from the saoke entries
+                if not saoke_entries:
+                    logger.error("No transactions were successfully processed")
+                    return AccountingResponse(
+                        success=False,
+                        message=f"No transactions were successfully processed. {failed_count} transactions failed.",
+                    )
+
+                # Process dates from the original saoke_entries to ensure DD/MM/YYYY format
+                # Do this before creating the formatted DataFrame
+                for entry in saoke_entries:
+                    try:
+                        # Handle 'date' field
+                        if "date" in entry and entry["date"]:
+                            # If it's a string with a time component (contains space)
+                            if (
+                                isinstance(entry["date"], str)
+                                and " " in entry["date"]
+                            ):
+                                # Extract just the date part
+                                date_part = entry["date"].split(" ")[0]
+                                # Ensure it's in DD/MM/YYYY format
+                                if "/" in date_part:
+                                    parts = date_part.split("/")
+                                    if len(parts) == 3:
+                                        day = parts[0].zfill(2)
+                                        month = parts[1].zfill(2)
+                                        year = parts[2]
+                                        entry["date"] = f"{day}/{month}/{year}"
+                            else:
+                                # Try to parse and format
+                                try:
+                                    dt = pd.to_datetime(
+                                        entry["date"], errors="coerce"
+                                    )
+                                    if not pd.isna(dt):
+                                        entry["date"] = dt.strftime("%d/%m/%Y")
+                                except:
+                                    pass
+
+                        # Handle 'date2' field with the same logic
+                        if "date2" in entry and entry["date2"]:
+                            # If it's a string with a time component
+                            if (
+                                isinstance(entry["date2"], str)
+                                and " " in entry["date2"]
+                            ):
+                                date_part = entry["date2"].split(" ")[0]
+                                if "/" in date_part:
+                                    parts = date_part.split("/")
+                                    if len(parts) == 3:
+                                        day = parts[0].zfill(2)
+                                        month = parts[1].zfill(2)
+                                        year = parts[2]
+                                        entry["date2"] = f"{day}/{month}/{year}"
+                            else:
+                                try:
+                                    dt = pd.to_datetime(
+                                        entry["date2"], errors="coerce"
+                                    )
+                                    if not pd.isna(dt):
+                                        entry["date2"] = dt.strftime("%d/%m/%Y")
+                                except:
+                                    pass
+                    except Exception as e:
+                        logger.warning(f"Error formatting dates in entry: {e}")
+
+                # Create a DataFrame from the updated saoke entries
                 processed_df = pd.DataFrame(saoke_entries)
 
                 logger.info(
-                    f"Processed {len(processed_df)} transactions with IntegratedBankProcessor"
+                    f"Processed {len(processed_df)} transactions with IntegratedBankProcessor ({failed_count} failed)"
                 )
 
                 # Create Excel file with specific format for Saoke
@@ -518,12 +647,72 @@ async def process_bank_statement(file: UploadFile):
                 formatted_df["Ma_So_Thue"] = ""  # Empty
                 formatted_df["Ten_DtGtGt"] = ""  # Empty
                 formatted_df["Ma_Tc"] = ""  # Empty
-                formatted_df["Ma_Bp"] = processed_df.get("department", "")
-                formatted_df["Ma_Km"] = processed_df.get("cost_code", "")
+                formatted_df["Ma_Bp"] = ""  # Empty - Department code
+                formatted_df["Ma_Km"] = ""  # Empty - Cost code
                 formatted_df["Ma_Hd"] = ""  # Empty
                 formatted_df["Ma_Sp"] = ""  # Empty
                 formatted_df["Ma_Job"] = ""  # Empty
                 formatted_df["DUYET"] = ""  # Empty
+
+                # Additional safety measure: process the formatted dataframe directly
+                # to ensure all dates are in DD/MM/YYYY format
+                for date_col in ["Ngay_Ct", "Ngay_Ct0"]:
+                    if date_col in formatted_df.columns:
+                        # Handle each cell individually with careful error handling
+                        for idx in formatted_df.index:
+                            try:
+                                value = formatted_df.at[idx, date_col]
+
+                                # Skip empty values
+                                if pd.isna(value) or value == "":
+                                    continue
+
+                                # If it's already a string, check if it has time component
+                                if isinstance(value, str):
+                                    # Remove any leading apostrophes or other formatting characters
+                                    value = value.lstrip("'\"")
+
+                                    # Check if there's a time part (contains space)
+                                    if " " in value:
+                                        # Just take the date part before the space
+                                        date_part = value.split(" ")[0]
+                                    else:
+                                        date_part = value
+
+                                    # Check if it looks like a date
+                                    if "/" in date_part:
+                                        # Split by / to extract components
+                                        parts = date_part.split("/")
+                                        if len(parts) == 3:
+                                            # Format as DD/MM/YYYY
+                                            day = parts[0].zfill(
+                                                2
+                                            )  # Ensure 2 digits
+                                            month = parts[1].zfill(
+                                                2
+                                            )  # Ensure 2 digits
+                                            year = parts[2]
+                                            formatted_df.at[idx, date_col] = (
+                                                f"{day}/{month}/{year}"
+                                            )
+                                            continue
+
+                                # Try to parse as datetime and format
+                                dt_value = pd.to_datetime(
+                                    value, errors="coerce"
+                                )
+                                if not pd.isna(dt_value):
+                                    formatted_df.at[idx, date_col] = (
+                                        dt_value.strftime("%d/%m/%Y")
+                                    )
+                            except Exception as e:
+                                logger.warning(
+                                    f"Error processing date at index {idx}: {e}"
+                                )
+
+                        logger.info(
+                            f"Reformatted {date_col} column to ensure proper date formatting"
+                        )
 
                 # Save the formatted DataFrame to Excel
                 with pd.ExcelWriter(output_buffer, engine="openpyxl") as writer:

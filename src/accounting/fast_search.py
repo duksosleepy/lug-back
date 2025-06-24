@@ -12,9 +12,9 @@ INDEX_DIR = Path(__file__).parent / "index"
 
 
 def search_counterparties(query_text, field_name="name", limit=10):
-    """Search counterparties by name or other fields"""
+    """Search counterparties by name or other fields with enhanced two-condition support"""
     logger.info(
-        f"Searching counterparties for '{query_text}' in field '{field_name}'"
+        f"Searching counterparties for '{query_text}' in field '{field_name}' with limit {limit}"
     )
 
     try:
@@ -25,7 +25,7 @@ def search_counterparties(query_text, field_name="name", limit=10):
 
         # Create custom analyzer with ASCII folding for Vietnamese text
         vietnamese_analyzer = (
-            TextAnalyzerBuilder(Tokenizer.raw())
+            TextAnalyzerBuilder(Tokenizer.simple())
             .filter(Filter.ascii_fold())
             .filter(Filter.lowercase())
             .build()
@@ -37,37 +37,79 @@ def search_counterparties(query_text, field_name="name", limit=10):
         # Get searcher
         searcher = index.searcher()
 
+        # Handle empty or very short queries
+        if not query_text or len(query_text.strip()) < 2:
+            logger.info(
+                f"Query '{query_text}' too short or empty, returning empty results"
+            )
+            return []
+
+        # Process the query text
         processed_terms = vietnamese_analyzer.analyze(query_text)
-        processed_term = processed_terms[0] if processed_terms else query_text
-        regex_pattern = f".*{processed_term}.*"
-        query = Query.regex_query(index.schema, field_name, regex_pattern)
+        logger.debug(f"Processed terms: {processed_terms}")
+
+        # Determine search strategy based on number of terms and field type
+        if field_name == "code":
+            # For code searches, use exact or prefix matching
+            if query_text.strip():
+                regex_pattern = f".*{query_text.strip()}.*"
+                query = Query.regex_query(
+                    index.schema, field_name, regex_pattern
+                )
+                logger.debug(f"Using code regex query for: {query_text}")
+            else:
+                return []
+        elif len(processed_terms) > 1:
+            # Multi-term query - use phrase search for exact phrase matching
+            query = Query.phrase_query(
+                index.schema, field_name, processed_terms
+            )
+            logger.debug(f"Using phrase query for: {processed_terms}")
+        elif len(processed_terms) == 1:
+            # Single term - use regex for partial matching
+            processed_term = processed_terms[0]
+            regex_pattern = f".*{processed_term}.*"
+            query = Query.regex_query(index.schema, field_name, regex_pattern)
+            logger.debug(f"Using regex query for: {processed_term}")
+        else:
+            # Fallback to original query if no processed terms
+            regex_pattern = f".*{query_text}.*"
+            query = Query.regex_query(index.schema, field_name, regex_pattern)
+            logger.debug(f"Using fallback regex query for: {query_text}")
 
         # Execute search
         search_result = searcher.search(query, limit)
+        logger.debug(f"Search returned {len(search_result.hits)} hits")
 
         # Format results
         results = []
         for score, doc_address in search_result.hits:
             doc = searcher.doc(doc_address)
-            results.append(
-                {
-                    "score": score,
-                    "code": doc.get_first("code") or "",
-                    "name": doc.get_first("name") or "",
-                    "address": doc.get_first("address") or "",
-                    "phone": doc.get_first("phone") or "",
-                    "tax_id": doc.get_first("tax_id") or "",
-                }
-            )
+            result = {
+                "score": score,
+                "code": doc.get_first("code") or "",
+                "name": doc.get_first("name") or "",
+                "address": doc.get_first("address") or "",
+                "phone": doc.get_first("phone") or "",
+                "tax_id": doc.get_first("tax_id") or "",
+            }
 
+            # Only include results that have a valid code for two-condition logic
+            if result["code"] or result["name"]:
+                results.append(result)
+
+        logger.debug(f"Returning {len(results)} valid counterparty results")
         return results
 
     except Exception as e:
         logger.error(f"Error searching counterparties: {e}")
+        import traceback
+
+        traceback.print_exc()
         return []
 
 
-def search_exact_counterparties(query_text, field_name="name", limit=10):
+def search_exact_counterparties(query_text, field_name="name", limit=100):
     """Search counterparties by name or other fields"""
     logger.info(
         f"Searching counterparties for '{query_text}' in field '{field_name}'"
@@ -128,9 +170,9 @@ def search_exact_counterparties(query_text, field_name="name", limit=10):
 
 
 def search_accounts(query_text, field_name="name", limit=10):
-    """Search accounts by name or code"""
+    """Search accounts by name or code with improved error handling and fallback strategies"""
     logger.info(
-        f"Searching accounts for '{query_text}' in field '{field_name}'"
+        f"Searching accounts for '{query_text}' in field '{field_name}' with limit {limit}"
     )
 
     try:
@@ -153,22 +195,30 @@ def search_accounts(query_text, field_name="name", limit=10):
         # Get searcher
         searcher = index.searcher()
 
-        if query_text.isdigit():
+        # Handle empty query - this is a special case for loading all accounts
+        if not query_text or query_text.strip() == "":
+            logger.info("Empty query detected - using broad search strategy")
+            # Use a very broad regex that matches any content
+            query = Query.regex_query(index.schema, field_name, ".*")
+        elif query_text.isdigit():
             # For numeric input, construct regex pattern and use regex_query
             regex_pattern = f".*{query_text}.*"
             query = Query.regex_query(index.schema, field_name, regex_pattern)
-
         else:
             # For normal string input, process with Vietnamese analyzer
             processed_terms = vietnamese_analyzer.analyze(query_text)
-            processed_term = (
-                processed_terms[0] if processed_terms else query_text
-            )
-            regex_pattern = f".*{processed_term}.*"
+            if processed_terms:
+                processed_term = processed_terms[0]
+                regex_pattern = f".*{processed_term}.*"
+            else:
+                # Fallback to original query
+                regex_pattern = f".*{query_text}.*"
             query = Query.regex_query(index.schema, field_name, regex_pattern)
 
         # Execute search
         search_result = searcher.search(query, limit)
+
+        logger.debug(f"Search returned {len(search_result.hits)} hits")
 
         # Format results
         results = []
@@ -185,10 +235,14 @@ def search_accounts(query_text, field_name="name", limit=10):
                 }
             )
 
+        logger.debug(f"Returning {len(results)} formatted results")
         return results
 
     except Exception as e:
         logger.error(f"Error searching accounts: {e}")
+        import traceback
+
+        traceback.print_exc()
         return []
 
 
@@ -670,12 +724,26 @@ if __name__ == "__main__":
     print("=== Counterparty Search Examples ===")
 
     # Basic search for company name
-    results = search_counterparties("KL-GOBARIA", field_name="code")
+    results = search_counterparties(
+        "GODIAN",
+        field_name="code",
+    )
     print("\nCounterparties with 'THÀNH VIÊN SHINHAN' in name:")
     for result in results:
         print(
             f"Code: {result['code']} | Name: {result['name']} | Score: {result['score']:.4f}"
         )
+
+    results = search_exact_counterparties(
+        "BANK",
+        field_name="group_code",
+    )
+    print("\nCounterparties with 'GODIAN' in name:")
+    for result in results:
+        print(result)
+        # print(
+        #     f"Code: {result['code']} | Name: {result['name']} | Score: {result['score']:.4f}"
+        # )
 
     # Search for accounts by name
     print("\n=== Account Search Examples ===")

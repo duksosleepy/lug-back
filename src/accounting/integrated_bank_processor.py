@@ -14,6 +14,7 @@ Key features:
 """
 
 import io
+import json
 import re
 import sys
 from dataclasses import dataclass
@@ -158,6 +159,16 @@ class IntegratedBankProcessor:
             db_path=str(self.db_path)
         )
 
+        # Bank information tracking
+        self.current_bank_name = ""
+        self.current_bank_info = {}
+
+        # Flag for tracking special interest payment transactions
+        self._current_transaction_is_interest_payment = False
+
+        # Load bank information from _banks.json
+        self._load_bank_info()
+
         # Document number counters
         self.doc_counters = {"BC": 1, "BN": 1}
 
@@ -231,6 +242,112 @@ class IntegratedBankProcessor:
             r"CH\s+([A-Z0-9]+)",  # CH (cửa hàng) followed by code
         ]
 
+        # Special account mappings for specific Vietnamese keywords
+        self.special_account_mappings = {
+            "tiền cọc": "244",  # Deposit money
+            "tiền lãi": "811",  # Interest income
+            "PHI QUAN LY TAI KHOAN": "6427",  # Account management fee
+            "NOPTHUE": "333823",  # Tax payment
+            "Thanh toan lai": "5154",  # Interest payment
+            "thanh toan tien hang": "13682",  # Goods payment
+            "hoan tien": "1311",
+        }
+
+    def _load_bank_info(self):
+        """Load bank information from _banks.json"""
+        try:
+            banks_file = Path(__file__).parent / "_banks.json"
+            if banks_file.exists():
+                with open(banks_file, "r", encoding="utf-8") as f:
+                    self.banks_data = json.load(f)
+                self.logger.info(
+                    f"Loaded {len(self.banks_data)} banks from _banks.json"
+                )
+            else:
+                self.logger.warning(
+                    "_banks.json not found, using empty banks data"
+                )
+                self.banks_data = []
+        except Exception as e:
+            self.logger.error(f"Error loading bank information: {e}")
+            self.banks_data = []
+
+    def extract_bank_from_filename(self, filename: str) -> str:
+        """Extract bank name from filename (e.g., 'BIDV' from 'BIDV 3840.ods')
+        
+        Args:
+            filename: The filename to extract bank name from
+            
+        Returns:
+            Bank short name if found, empty string otherwise
+        """
+        if not filename:
+            return ""
+            
+        # Extract bank name from filename (e.g., BIDV from 'BIDV 3840.ods')
+        filename_parts = Path(filename).stem.split()
+        if not filename_parts:
+            return ""
+            
+        # Take the first part as potential bank name
+        potential_bank_name = filename_parts[0].upper()
+        self.logger.info(f"Attempting to extract bank from filename: '{filename}', potential name: '{potential_bank_name}'")
+        
+        return potential_bank_name
+    
+    def get_bank_info_by_name(self, bank_name: str) -> Dict:
+        """Get bank information by short name
+        
+        Args:
+            bank_name: Bank name or code to search for
+            
+        Returns:
+            Dictionary with bank information if found, None otherwise
+        """
+        if not bank_name:
+            return None
+            
+        bank_name_upper = bank_name.upper()
+        
+        # First try exact match on short_name
+        for bank in self.banks_data:
+            if bank_name_upper == bank.get("short_name", "").upper():
+                self.logger.info(f"Found exact bank match: {bank.get('short_name')}")
+                return bank
+                
+        # If not found by short_name, try more flexible matching
+        for bank in self.banks_data:
+            bank_full_name = bank.get("name", "").upper()
+            short_name = bank.get("short_name", "").upper()
+            
+            if bank_name_upper in bank_full_name or bank_name_upper in short_name:
+                self.logger.info(f"Found partial bank match: {bank.get('short_name')}")
+                return bank
+                
+        self.logger.warning(f"Could not find bank information for '{bank_name}'")
+        return None
+        
+    def set_bank_from_filename(self, filename: str) -> bool:
+        """Set current bank based on filename pattern (e.g., 'BIDV 3840.ods')"""
+        if not filename:
+            return False
+
+        # Extract bank name from filename
+        potential_bank_name = self.extract_bank_from_filename(filename)
+        if not potential_bank_name:
+            return False
+
+        # Get bank info
+        bank_info = self.get_bank_info_by_name(potential_bank_name)
+        if bank_info:
+            self.current_bank_name = bank_info.get("short_name", "")
+            self.current_bank_info = bank_info
+            self.logger.info(f"Set current bank to {self.current_bank_name} from filename")
+            return True
+
+        self.logger.warning(f"Could not match bank name '{potential_bank_name}' from filename")
+        return False
+
     def connect(self) -> bool:
         """Initialize the processor without database connection"""
         try:
@@ -257,10 +374,78 @@ class IntegratedBankProcessor:
         try:
             from src.accounting.fast_search import search_accounts
 
-            # Get all accounts using fast_search
-            # We need to search for a pattern that will match all accounts
-            # Using an empty string should return all accounts with a high limit
-            all_accounts = search_accounts("", field_name="code", limit=1000)
+            # Get all accounts using multiple search strategies to ensure we get all accounts
+            self.logger.info(
+                "Loading accounts cache using multiple search strategies..."
+            )
+
+            all_accounts = []
+
+            # Strategy 1: Try common account prefixes to get comprehensive results
+            account_prefixes = [
+                "1",
+                "2",
+                "3",
+                "4",
+                "5",
+                "6",
+                "7",
+                "8",
+                "9",
+                "0",
+            ]
+            for prefix in account_prefixes:
+                try:
+                    prefix_accounts = search_accounts(
+                        prefix, field_name="code", limit=500
+                    )
+                    all_accounts.extend(prefix_accounts)
+                    self.logger.debug(
+                        f"Found {len(prefix_accounts)} accounts with prefix '{prefix}'"
+                    )
+                except Exception as e:
+                    self.logger.warning(
+                        f"Error searching accounts with prefix '{prefix}': {e}"
+                    )
+                    continue
+
+            # Strategy 2: Search by name patterns to catch any missed accounts
+            name_patterns = [
+                "tai khoan",
+                "tien",
+                "vay",
+                "no",
+                "thu",
+                "chi",
+                "lai",
+                "von",
+            ]
+            for pattern in name_patterns:
+                try:
+                    name_accounts = search_accounts(
+                        pattern, field_name="name", limit=200
+                    )
+                    all_accounts.extend(name_accounts)
+                    self.logger.debug(
+                        f"Found {len(name_accounts)} accounts with name pattern '{pattern}'"
+                    )
+                except Exception as e:
+                    self.logger.warning(
+                        f"Error searching accounts with name pattern '{pattern}': {e}"
+                    )
+                    continue
+
+            # Remove duplicates based on account code
+            unique_accounts = {}
+            for account in all_accounts:
+                account_code = account.get("code")
+                if account_code and account_code not in unique_accounts:
+                    unique_accounts[account_code] = account
+
+            all_accounts = list(unique_accounts.values())
+            self.logger.info(
+                f"Found {len(all_accounts)} unique accounts after deduplication"
+            )
 
             self.account_cache = {}
             count = 0
@@ -280,6 +465,14 @@ class IntegratedBankProcessor:
                         )
                         count += 1
 
+                # Also index by account code itself for direct lookups
+                if account_code not in self.account_cache:
+                    self.account_cache[account_code] = []
+                self.account_cache[account_code].append(
+                    {"code": account_code, "name": account_name}
+                )
+                count += 1
+
             self.logger.info(
                 f"Loaded {len(self.account_cache)} numeric codes from {len(all_accounts)} accounts using fast_search"
             )
@@ -289,6 +482,9 @@ class IntegratedBankProcessor:
             import traceback
 
             traceback.print_exc()
+
+            # Fallback: Initialize empty cache to prevent errors
+            self.account_cache = {}
 
     def extract_account_from_header(
         self, file_path: Union[str, io.BytesIO]
@@ -598,6 +794,234 @@ class IntegratedBankProcessor:
 
         return None
 
+    def _normalize_vietnamese_text(self, text: str) -> str:
+        """
+        Normalize Vietnamese text for pattern matching by removing diacritics
+        and converting to uppercase for consistent comparison.
+
+        Args:
+            text: Input Vietnamese text
+
+        Returns:
+            Normalized text with diacritics removed
+        """
+        if not text:
+            return text
+
+        # Convert to uppercase first
+        normalized = text.upper()
+
+        # Vietnamese diacritic removal mapping
+        vietnamese_chars = {
+            "Á": "A",
+            "À": "A",
+            "Ả": "A",
+            "Ã": "A",
+            "Ạ": "A",
+            "Ă": "A",
+            "Ắ": "A",
+            "Ằ": "A",
+            "Ẳ": "A",
+            "Ẵ": "A",
+            "Ặ": "A",
+            "Â": "A",
+            "Ấ": "A",
+            "Ầ": "A",
+            "Ẩ": "A",
+            "Ẫ": "A",
+            "Ậ": "A",
+            "É": "E",
+            "È": "E",
+            "Ẻ": "E",
+            "Ẽ": "E",
+            "Ẹ": "E",
+            "Ê": "E",
+            "Ế": "E",
+            "Ề": "E",
+            "Ể": "E",
+            "Ễ": "E",
+            "Ệ": "E",
+            "Í": "I",
+            "Ì": "I",
+            "Ỉ": "I",
+            "Ĩ": "I",
+            "Ị": "I",
+            "Ó": "O",
+            "Ò": "O",
+            "Ỏ": "O",
+            "Õ": "O",
+            "Ọ": "O",
+            "Ô": "O",
+            "Ố": "O",
+            "Ồ": "O",
+            "Ổ": "O",
+            "Ỗ": "O",
+            "Ộ": "O",
+            "Ơ": "O",
+            "Ớ": "O",
+            "Ờ": "O",
+            "Ở": "O",
+            "Ỡ": "O",
+            "Ợ": "O",
+            "Ú": "U",
+            "Ù": "U",
+            "Ủ": "U",
+            "Ũ": "U",
+            "Ụ": "U",
+            "Ư": "U",
+            "Ứ": "U",
+            "Ừ": "U",
+            "Ử": "U",
+            "Ữ": "U",
+            "Ự": "U",
+            "Ý": "Y",
+            "Ỳ": "Y",
+            "Ỷ": "Y",
+            "Ỹ": "Y",
+            "Ỵ": "Y",
+            "Đ": "D",
+        }
+
+        # Replace Vietnamese characters
+        for vn_char, en_char in vietnamese_chars.items():
+            normalized = normalized.replace(vn_char, en_char)
+
+        return normalized
+
+    def determine_special_accounts(
+        self, description: str, document_type: str
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Check for special Vietnamese keywords and return appropriate account mappings.
+        This has the highest priority and should be called before other account determination logic.
+
+        Args:
+            description: Transaction description
+            document_type: Document type (BC for receipts, BN for payments)
+
+        Returns:
+            Tuple of (debit_account, credit_account) or (None, None) if no special keywords found
+        """
+        if not description:
+            return None, None
+
+        # Normalize the description for comparison
+        normalized_desc = self._normalize_vietnamese_text(description)
+
+        self.logger.debug(
+            f"Checking special accounts for: '{description}' -> '{normalized_desc}'"
+        )
+
+        # ENHANCED LOGIC: Special handling for "Thanh toan lai" (Interest payment)
+        normalized_thanh_toan_lai = self._normalize_vietnamese_text(
+            "Thanh toan lai"
+        )
+        if normalized_thanh_toan_lai in normalized_desc:
+            self.logger.info(
+                f"Found 'Thanh toan lai' in description: '{description}'"
+            )
+
+            # Apply enhanced logic using bank information if available
+            special_account = self.special_account_mappings.get(
+                "Thanh toan lai", "5154"
+            )
+
+            # Check that the account exists in our system
+            account_match = self.find_account_by_code(special_account)
+            if not account_match:
+                self.logger.warning(
+                    f"Special account {special_account} for 'Thanh toan lai' not found in database. Falling back to normal logic."
+                )
+            else:
+                # Apply the special logic based on document type
+                if document_type == "BC":  # Receipt/Credit transaction
+                    # For receipts: money comes into bank, special account is credited
+                    debit_account = self.default_bank_account
+                    credit_account = special_account
+
+                    # Check if we have bank information to enhance the description
+                    bank_info_str = ""
+                    if self.current_bank_name:
+                        bank_info_str = f" - {self.current_bank_name}"
+                        if self.current_bank_info and self.current_bank_info.get("address"):
+                            bank_info_str += f" ({self.current_bank_info.get('address')})"
+                    
+                    self.logger.info(
+                        f"Enhanced 'Thanh toan lai' mapping (Receipt): Dr={debit_account} (bank), Cr={credit_account} (interest){bank_info_str}"
+                    )
+                    # Store information about this being a special interest payment
+                    # This will be used later in process_transaction to enhance the entry
+                    self._current_transaction_is_interest_payment = True
+                    return debit_account, credit_account
+                else:  # BN - Payment/Debit transaction
+                    # For payments: money goes out of bank, special account is debited
+                    debit_account = special_account
+                    credit_account = self.default_bank_account
+
+                    # Check if we have bank information to enhance the description
+                    bank_info_str = ""
+                    if self.current_bank_name:
+                        bank_info_str = f" - {self.current_bank_name}"
+                        if self.current_bank_info and self.current_bank_info.get("address"):
+                            bank_info_str += f" ({self.current_bank_info.get('address')})"
+                    
+                    self.logger.info(
+                        f"Enhanced 'Thanh toan lai' mapping (Payment): Dr={debit_account} (interest), Cr={credit_account} (bank){bank_info_str}"
+                    )
+                    # Store information about this being a special interest payment
+                    # This will be used later in process_transaction to enhance the entry
+                    self._current_transaction_is_interest_payment = True
+                    return debit_account, credit_account
+
+        # Check each special keyword mapping (standard logic for other keywords)
+        for keyword, special_account in self.special_account_mappings.items():
+            # Skip Thanh toan lai as we already handled it above
+            if keyword == "Thanh toan lai":
+                continue
+
+            # Normalize the keyword for comparison
+            normalized_keyword = self._normalize_vietnamese_text(keyword)
+
+            if normalized_keyword in normalized_desc:
+                self.logger.info(
+                    f"Found special keyword '{keyword}' -> account {special_account} in description: '{description}'"
+                )
+
+                # Validate that the special account exists in our account cache/database
+                account_match = self.find_account_by_code(special_account)
+                if not account_match:
+                    self.logger.warning(
+                        f"Special account {special_account} for keyword '{keyword}' not found in database. Falling back to normal logic."
+                    )
+                    continue
+
+                # Determine debit/credit based on document type and account nature
+                if document_type == "BC":  # Receipt/Credit transaction
+                    # For receipts: money comes into bank, special account is credited
+                    debit_account = self.default_bank_account
+                    credit_account = special_account
+
+                    self.logger.info(
+                        f"Special account mapping (Receipt): Dr={debit_account} (bank), Cr={credit_account} (special)"
+                    )
+                    return debit_account, credit_account
+
+                else:  # BN - Payment/Debit transaction
+                    # For payments: money goes out of bank, special account is debited
+                    debit_account = special_account
+                    credit_account = self.default_bank_account
+
+                    self.logger.info(
+                        f"Special account mapping (Payment): Dr={debit_account} (special), Cr={credit_account} (bank)"
+                    )
+                    return debit_account, credit_account
+
+        # No special keywords found
+        self.logger.debug("No special keywords found in description")
+        # Reset the interest payment flag
+        self._current_transaction_is_interest_payment = False
+        return None, None
+
     def determine_accounts_by_codes(
         self,
         description: str,
@@ -882,7 +1306,7 @@ class IntegratedBankProcessor:
             return self.default_bank_account, "1311"
         else:  # BN - Payment/Debit
             # For payments: debit expense, credit bank account
-            return "6278", self.default_bank_account
+            return "3311", self.default_bank_account
 
     def determine_accounts(
         self,
@@ -909,19 +1333,29 @@ class IntegratedBankProcessor:
         Returns:
             Tuple of (debit_account, credit_account)
         """
-        # First try to determine accounts by extracting numeric codes
+        # PRIORITY 1: Check for special Vietnamese keywords first
+        special_debit, special_credit = self.determine_special_accounts(
+            description, document_type
+        )
+        if special_debit and special_credit:
+            self.logger.info(
+                f"Using special account mapping: Dr={special_debit}, Cr={special_credit}"
+            )
+            return special_debit, special_credit
+
+        # PRIORITY 2: Try to determine accounts by extracting numeric codes
         debit_by_code, credit_by_code = self.determine_accounts_by_codes(
             description, is_credit, document_type, transaction_type
         )
 
-        # If we found accounts by code extraction, use them
+        # PRIORITY 3: If we found accounts by code extraction, use them
         if debit_by_code and credit_by_code:
             self.logger.info(
                 f"Determined complete accounts by code extraction: Dr={debit_by_code}, Cr={credit_by_code}"
             )
             return debit_by_code, credit_by_code
 
-        # If we have a counterparty code, try to determine accounts based on that
+        # PRIORITY 4: If we have a counterparty code, try to determine accounts based on that
         if counterparty_code:
             debit_by_cp, credit_by_cp = self.determine_accounts_by_counterparty(
                 counterparty_code, document_type, transaction_type
@@ -938,7 +1372,7 @@ class IntegratedBankProcessor:
                     )
                     return final_debit, final_credit
 
-        # If we have partial accounts from code extraction, fill in the missing ones
+        # PRIORITY 5: If we have partial accounts from code extraction, fill in the missing ones
         if debit_by_code or credit_by_code:
             if document_type == "BC":  # Receipt
                 if not credit_by_code:
@@ -950,7 +1384,7 @@ class IntegratedBankProcessor:
             else:  # BN - Payment
                 if not debit_by_code:
                     # Default debit account for payments
-                    debit_by_code = "6278"  # Other expenses
+                    debit_by_code = "3311"  # Other expenses
                 if not credit_by_code:
                     # This shouldn't happen for payments, but use default bank
                     credit_by_code = self.default_bank_account
@@ -960,7 +1394,7 @@ class IntegratedBankProcessor:
             )
             return debit_by_code, credit_by_code
 
-        # Fallback to using fast_search for POS and department-based determination
+        # PRIORITY 6: Fallback to using fast_search for POS and department-based determination
         try:
             # Use fast_search.py to look up information instead of SQL queries
             from src.accounting.fast_search import (
@@ -985,8 +1419,8 @@ class IntegratedBankProcessor:
                         # For POS sales receipts
                         return self.default_bank_account, "1311"
                     else:
-                        # For POS-related payments
-                        return "6278", self.default_bank_account
+                        # For POS-related payments (card fees)
+                        return "3311", self.default_bank_account
 
             # Try department-specific rules using fast_search
             if department_code:
@@ -1001,7 +1435,7 @@ class IntegratedBankProcessor:
                         return self.default_bank_account, "1311"
                     else:
                         # For department payments
-                        return "6278", self.default_bank_account
+                        return "3311", self.default_bank_account
 
             # Transaction type based mappings
             if transaction_type:
@@ -1014,34 +1448,34 @@ class IntegratedBankProcessor:
                         return self.default_bank_account, "1311"
                 else:  # BN - Payment
                     if transaction_type == "FEE":
-                        return "6278", self.default_bank_account
+                        return "3311", self.default_bank_account
                     elif transaction_type == "SALARY":
                         return "6411", self.default_bank_account
                     elif transaction_type == "TAX":
                         return "3331", self.default_bank_account
                     elif transaction_type == "UTILITY":
-                        return "6278", self.default_bank_account
+                        return "3311", self.default_bank_account
                     elif transaction_type == "WITHDRAWAL":
                         return "1111", self.default_bank_account
                     elif transaction_type == "TRANSFER":
-                        return "6278", self.default_bank_account
+                        return "3311", self.default_bank_account
                     else:
-                        return "6278", self.default_bank_account
+                        return "3311", self.default_bank_account
 
-            # Default mappings
+            # Default mappings - Updated to use 3311 and 1311
             if document_type == "BC":
                 return self.default_bank_account, "1311"
             else:
-                return "6278", self.default_bank_account
+                return "3311", self.default_bank_account
 
         except Exception as e:
             self.logger.error(f"Error in account determination: {e}")
 
-        # Final fallback
+        # Final fallback - Updated to use 3311 and 1311
         if document_type == "BC":
             return self.default_bank_account, "1311"
         else:
-            return "6278", self.default_bank_account
+            return "3311", self.default_bank_account
 
     def generate_document_number(
         self, doc_type: str, transaction_date: datetime
@@ -1060,15 +1494,8 @@ class IntegratedBankProcessor:
 
     def format_date(self, dt: datetime, format_type: str = "vn") -> str:
         """Format date in required format"""
-        if format_type == "vn":
-            # Vietnamese format: DD/M/YYYY (e.g., 01/3/2025)
-            return f"{dt.day:02d}/{dt.month}/{dt.year}"
-        elif format_type == "alt":
-            # Alternative format: M/DD/YYYY (e.g., 3/01/2025)
-            return f"{dt.month}/{dt.day:02d}/{dt.year}"
-        else:
-            # Standard format: DD/MM/YYYY
-            return f"{dt.day:02d}/{dt.month:02d}/{dt.year}"
+        # All formats now use standard DD/MM/YYYY
+        return f"{dt.day:02d}/{dt.month:02d}/{dt.year}"
 
     def get_counterparty_info(self, counterparty_code: str) -> Tuple[str, str]:
         """
@@ -1145,22 +1572,95 @@ class IntegratedBankProcessor:
                 )
             )
 
-            # Process extracted counterparties
+            # Apply NEW business logic based on object type from CounterpartyExtractor
+            extracted_accounts = extracted_entities.get("accounts", [])
+            extracted_pos_machines = extracted_entities.get("pos_machines", [])
             extracted_counterparties = extracted_entities.get(
                 "counterparties", []
             )
-            # Use the extracted counterparty if found, otherwise use the one from rule
-            counterparty_code = rule.counterparty_code or "KL"
-            counterparty_name = None
 
-            if extracted_counterparties:
-                best_match = extracted_counterparties[0]
-                # Extract both code and name, prioritizing name for the final output
-                counterparty_code = best_match.get("code") or counterparty_code
-                counterparty_name = best_match.get("name")
+            # Priority 1: If extracted object is an account
+            if extracted_accounts:
                 self.logger.info(
-                    f"Extracted counterparty: {counterparty_code} - {counterparty_name}"
+                    "Detected account object, using Sáng Tâm company info"
                 )
+                counterparty_info = {
+                    "code": "31754",
+                    "name": "Công Ty TNHH Sáng Tâm",
+                    "address": "32-34 Đường 74, Phường 10, Quận 6, Tp. Hồ Chí Minh",
+                    "source": "hardcoded_account_rule",
+                    "condition_applied": "account_detected",
+                    "phone": "",
+                    "tax_id": "",
+                }
+            # Priority 2: If extracted object is POS machine or counterparty
+            elif extracted_pos_machines or extracted_counterparties:
+                if extracted_pos_machines:
+                    # Use POS machine counterparty logic (gets counterparty from department_code)
+                    self.logger.info(
+                        "Detected POS machine object, applying POS machine counterparty logic"
+                    )
+                    counterparty_info = self.counterparty_extractor.handle_pos_machine_counterparty_logic(
+                        extracted_pos_machines
+                    )
+
+                    # If POS machine logic failed, fall back to default
+                    if not counterparty_info:
+                        self.logger.warning(
+                            "POS machine counterparty logic failed, using default counterparty"
+                        )
+                        counterparty_info = {
+                            "code": "KL",
+                            "name": "Khách Lẻ Không Lấy Hóa Đơn",
+                            "address": "",
+                            "source": "default_after_pos_failure",
+                            "condition_applied": "pos_machine_failed",
+                            "phone": "",
+                            "tax_id": "",
+                        }
+                else:
+                    # Use counterparty info directly
+                    cp_info = extracted_counterparties[
+                        0
+                    ]  # Take first/best match
+                    self.logger.info(
+                        f"Detected counterparty object, using extracted info: {cp_info.get('name', cp_info.get('code', ''))}"
+                    )
+                    counterparty_info = {
+                        "code": cp_info.get("code"),
+                        "name": cp_info.get(
+                            "name", cp_info.get("extracted_name", "")
+                        ),
+                        "address": cp_info.get("address", ""),
+                        "source": "counterparty_extracted",
+                        "condition_applied": "counterparty_detected",
+                        "phone": cp_info.get("phone", ""),
+                        "tax_id": cp_info.get("tax_id", ""),
+                    }
+            # Priority 3: Fall back to existing two-condition logic
+            else:
+                self.logger.info(
+                    "No specific object detected, using existing two-condition logic"
+                )
+                counterparty_info = self.counterparty_extractor.handle_counterparty_two_conditions(
+                    extracted_counterparties
+                )
+
+            # Extract counterparty details from the result
+            counterparty_code = (
+                counterparty_info.get("code") or rule.counterparty_code or "KL"
+            )
+            counterparty_name = counterparty_info.get("name")
+            counterparty_address = counterparty_info.get("address") or ""
+            condition_applied = counterparty_info.get(
+                "condition_applied", "unknown"
+            )
+
+            self.logger.info(
+                f"Counterparty processing result - Condition: {condition_applied}, "
+                f"Code: {counterparty_code}, Name: {counterparty_name}, "
+                f"Source: {counterparty_info.get('source', 'unknown')}"
+            )
 
             # Process extracted accounts
             extracted_accounts = extracted_entities.get("accounts", [])
@@ -1205,59 +1705,113 @@ class IntegratedBankProcessor:
                 counterparty_code=counterparty_code,
             )
 
-            # Get counterparty info from database
+            # Get counterparty info from database only if not already obtained from two-condition logic
             if not counterparty_name:
-                counterparty_name, address = self.get_counterparty_info(
+                counterparty_name, counterparty_address = (
+                    self.get_counterparty_info(counterparty_code)
+                )
+            elif not counterparty_address and counterparty_code:
+                # Already have the name, just look up the address if we don't have it
+                _, counterparty_address = self.get_counterparty_info(
                     counterparty_code
                 )
-            else:
-                # Already have the name, just look up the address
-                _, address = self.get_counterparty_info(counterparty_code)
 
-            # Format description
-            description = rule.description_template or transaction.description
+            # Ensure we have a final address (even if empty)
+            address = counterparty_address or ""
 
-            # Replace placeholders in description
-            if "{pos_code}" in description:
-                if pos_name:  # Prioritize POS name when available
-                    if department_code:
-                        description = description.replace(
-                            "{pos_code}", f"{pos_name} - {department_code}"
-                        )
+            # Format description - Apply specialized business logic based on transaction type
+
+            # ENHANCED LOGIC: Special handling for "Thanh toan lai" (Interest payment) transactions
+            if self._current_transaction_is_interest_payment:
+                # Apply enhanced description with bank information if available
+                bank_name = self.current_bank_name
+                if bank_name:
+                    # Get full bank info from current_bank_info
+                    bank_address = self.current_bank_info.get("address", "")
+                    bank_code = self.current_bank_info.get("code", "")
+                    
+                    # Set counterparty code to bank code from _banks.json
+                    if bank_code:
+                        counterparty_code = str(bank_code)  # Make sure it's a string
+                        self.logger.info(f"Setting counterparty code to bank code: {counterparty_code}")
                     else:
-                        description = description.replace(
-                            "{pos_code}", pos_name
-                        )
-                elif pos_code:  # Fall back to code if name not available
-                    if department_code:
-                        description = description.replace(
-                            "{pos_code}", f"{pos_code} - {department_code}"
-                        )
-                    else:
-                        description = description.replace(
-                            "{pos_code}", pos_code
-                        )
+                        counterparty_code = "BANK-" + bank_name if bank_name else counterparty_code
+                            
+                    if rule.document_type == "BN":  # Payment
+                        description = f"Thanh toán lãi tiền vay {bank_name}"
+                        if bank_address:
+                            description += f" - {bank_address}"
+                    else:  # Receipt
+                        description = f"Lãi tiền gửi ngân hàng {bank_name}"
+                        if bank_address:
+                            description += f" - {bank_address}"
 
-            # If we have an extracted counterparty, update the description
-            if counterparty_name and "{counterparty}" in description:
-                description = description.replace(
-                    "{counterparty}", counterparty_name
-                )
+                    # Override counterparty with bank info
+                    counterparty_name = self.current_bank_info.get("name", bank_name) or counterparty_name
+                    address = bank_address or address
 
-            # Handle {suffix} placeholder
-            if "{suffix}" in description:
-                # Extract transaction sequence number if possible
-                if pos_code and "_" in transaction.description:
-                    seq_match = re.search(
-                        r"_(\d+)_(\d+)", transaction.description
+                    self.logger.info(
+                        f"Applied enhanced 'Thanh toan lai' logic with bank info: {description}\n"
+                        f"Counterparty Code: {counterparty_code}, Counterparty Name: {counterparty_name}"
                     )
-                    if seq_match:
-                        suffix = f"{seq_match.group(1)}_{seq_match.group(2)}"
-                    else:
-                        suffix = "1"
                 else:
-                    suffix = "1"
-                description = description.replace("{suffix}", suffix)
+                    # Fallback to standard description if no bank info
+                    if rule.document_type == "BN":  # Payment
+                        description = "Thanh toán lãi tiền vay ngân hàng"
+                    else:  # Receipt
+                        description = "Lãi tiền gửi ngân hàng"
+                    self.logger.info(
+                        f"Applied standard 'Thanh toan lai' logic (no bank info): {description}"
+                    )
+
+                # Reset the flag for next transaction
+                self._current_transaction_is_interest_payment = False
+
+            # Apply business logic for POS machine statements
+            elif pos_code:
+                # POS machine transactions get formatted descriptions based on document type
+                if rule.document_type == "BN":
+                    # BN: POS machine payments = Card fee transaction
+                    if pos_name:
+                        if department_code:
+                            description = (
+                                f"Phí cà thẻ {pos_name} - {department_code}"
+                            )
+                        else:
+                            description = f"Phí cà thẻ {pos_name}"
+                    else:
+                        if department_code:
+                            description = (
+                                f"Phí cà thẻ POS {pos_code} - {department_code}"
+                            )
+                        else:
+                            description = f"Phí cà thẻ POS {pos_code}"
+                    self.logger.info(
+                        f"Applied POS machine BN logic: {description}"
+                    )
+                else:
+                    # BC: POS machine receipts = Sales transaction
+                    if pos_name:
+                        if department_code:
+                            description = f"Thu tiền bán hàng khách lẻ {pos_name} - {department_code}"
+                        else:
+                            description = (
+                                f"Thu tiền bán hàng khách lẻ {pos_name}"
+                            )
+                    else:
+                        if department_code:
+                            description = f"Thu tiền bán hàng khách lẻ POS {pos_code} - {department_code}"
+                        else:
+                            description = (
+                                f"Thu tiền bán hàng khách lẻ POS {pos_code}"
+                            )
+                    self.logger.info(
+                        f"Applied POS machine BC logic: {description}"
+                    )
+            else:
+                # For all other cases, use the raw/original description
+                description = transaction.description
+                self.logger.info(f"Using original description: {description}")
 
             # Extract transaction sequence number
             if pos_code and "_" in transaction.description:

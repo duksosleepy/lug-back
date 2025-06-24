@@ -1,0 +1,26 @@
+[
+    {
+        "code": 12437,
+        "name": "NGÂN HÀNG THƯƠNG MẠI CỔ PHẦN NGOẠI THƯƠNG VIỆT NAM",
+        "short_name": "VIETCOMBANK",
+        "address": "198 Trần Quang Khải, Phường Lý Thái Tổ, Quận Hoàn Kiếm, TP.Hà Nội"
+    },
+    {
+        "code": 44865,
+        "name": "NGÂN HÀNG THƯƠNG MẠI CỔ PHẦN TIÊN PHONG",
+        "short_name": "TPBANK",
+        "address": "Tòa Nhà TPBank, Số 57, Phố Lý Thường Kiệt, Phường Trần Hưng Đạo, Quận Hoàn Kiếm, TP. Hà Nội"
+    },
+    {
+        "code": 50619,
+        "name": "NGÂN HÀNG THƯƠNG MẠI CỔ PHẦN ĐẦU TƯ VÀ PHÁT TRIỂN VIỆT NAM",
+        "short_name": "BIDV",
+        "address": "Tháp BIDV, số 35 Hàng Vôi, Quận Hoàn Kiếm, Hà Nội"
+    },
+    {
+        "code": 83873,
+        "name": "NGÂN HÀNG THƯƠNG MẠI CỔ PHẦN QUÂN ĐỘI",
+        "short_name": "MBBANK",
+        "address": "Số 18 Lê Văn Lương, Phường Trung Hòa, Quận Cầu Giấy, Thành phố Hà Nội, Việt Nam"
+    }
+]
