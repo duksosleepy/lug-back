@@ -574,7 +574,11 @@ async def submit_warranty(request: WarrantyRequest):
 
         # Format số điện thoại
         formatted_phone = format_phone_number(request.phone)
-
+        if formatted_phone is None:
+            return {
+                "success": False,
+                "message": "Số điện thoại không hợp lệ theo định dạng Việt Nam. Vui lòng kiểm tra và thử lại.",
+            }
         # First, check if the order code has already been registered
         order_code = request.order_code
         check_url = f"{app_settings.api_endpoint}/tables/miyw4f4yeojamv6/records?where=(ma_don_hang%2Ceq%2C{order_code})&limit=1"

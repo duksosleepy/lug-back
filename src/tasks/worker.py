@@ -2,6 +2,8 @@
 Module tasks.worker.py - Quản lý các tác vụ nền cho đồng bộ dữ liệu đăng ký bảo hành.
 """
 
+import asyncio
+
 import httpx
 from celery import Celery
 from loguru import logger
@@ -28,6 +30,14 @@ celery_app.conf.update(
         "sync-pending-registrations": {
             "task": "tasks.worker.sync_pending_registrations",
             "schedule": 3600.0,  # Chạy mỗi giờ (3600s)
+            "args": (),
+        },
+        "daily-sapo-sync": {
+            "task": "tasks.worker.daily_sapo_sync",
+            "schedule": {
+                "hour": "0",
+                "minute": "30",
+            },  # Chạy vào 00:30 AM mỗi ngày
             "args": (),
         },
     },
@@ -206,6 +216,68 @@ def add_to_warranty_tracking(
 
 
 # === PHẦN 3: TASK ĐỒNG BỘ CHÍNH ===
+
+
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
+async def daily_sapo_sync(self):
+    """
+    Task chạy hàng ngày vào 00:30 AM để đồng bộ dữ liệu từ Sapo APIs.
+    Đồng bộ từ ngày 31/12 của năm trước đến ngày hiện tại.
+    """
+    from datetime import datetime
+
+    from sapo_sync import SapoSyncRequest, sync_mysapo, sync_mysapogo
+
+    try:
+        # Lấy ngày 31/12 của năm trước và ngày hiện tại để đồng bộ (format: YYYY-MM-DD)
+        today = datetime.now()
+        start_date = f"{today.year - 1}-12-31"
+        end_date = today.strftime("%Y-%m-%d")
+
+        logger.info(
+            f"Bắt đầu đồng bộ Sapo hàng ngày từ {start_date} đến {end_date}"
+        )
+
+        # Tạo request data
+        request_data = SapoSyncRequest(startDate=start_date, endDate=end_date)
+
+        # Gọi các hàm đồng bộ đồng thời
+        mysapo_task = sync_mysapo(request_data.startDate, request_data.endDate)
+        mysapogo_task = sync_mysapogo(
+            request_data.startDate, request_data.endDate
+        )
+
+        # Đợi cả hai task hoàn thành
+        mysapo_result, mysapogo_result = await asyncio.gather(
+            mysapo_task, mysapogo_task
+        )
+
+        total_orders_processed = mysapo_result.get(
+            "orders_processed", 0
+        ) + mysapogo_result.get("orders_processed", 0)
+
+        logger.info(
+            f"Đồng bộ Sapo hàng ngày hoàn tất. Tổng số đơn hàng đã xử lý: {total_orders_processed}"
+        )
+
+        return {
+            "success": True,
+            "message": "Đồng bộ Sapo hàng ngày hoàn tất",
+            "mysapo_net": mysapo_result,
+            "mysapogo_com": mysapogo_result,
+            "total_orders_processed": total_orders_processed,
+        }
+    except Exception as e:
+        logger.error(
+            f"Lỗi trong quá trình đồng bộ Sapo hàng ngày: {str(e)}",
+            exc_info=True,
+        )
+        # Retry task nếu xảy ra lỗi
+        self.retry(exc=e)
+        return {
+            "success": False,
+            "message": f"Lỗi khi đồng bộ Sapo hàng ngày: {str(e)}",
+        }
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
