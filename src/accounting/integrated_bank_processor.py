@@ -274,59 +274,70 @@ class IntegratedBankProcessor:
 
     def extract_bank_from_filename(self, filename: str) -> str:
         """Extract bank name from filename (e.g., 'BIDV' from 'BIDV 3840.ods')
-        
+
         Args:
             filename: The filename to extract bank name from
-            
+
         Returns:
             Bank short name if found, empty string otherwise
         """
         if not filename:
             return ""
-            
+
         # Extract bank name from filename (e.g., BIDV from 'BIDV 3840.ods')
         filename_parts = Path(filename).stem.split()
         if not filename_parts:
             return ""
-            
+
         # Take the first part as potential bank name
         potential_bank_name = filename_parts[0].upper()
-        self.logger.info(f"Attempting to extract bank from filename: '{filename}', potential name: '{potential_bank_name}'")
-        
+        self.logger.info(
+            f"Attempting to extract bank from filename: '{filename}', potential name: '{potential_bank_name}'"
+        )
+
         return potential_bank_name
-    
+
     def get_bank_info_by_name(self, bank_name: str) -> Dict:
         """Get bank information by short name
-        
+
         Args:
             bank_name: Bank name or code to search for
-            
+
         Returns:
             Dictionary with bank information if found, None otherwise
         """
         if not bank_name:
             return None
-            
+
         bank_name_upper = bank_name.upper()
-        
+
         # First try exact match on short_name
         for bank in self.banks_data:
             if bank_name_upper == bank.get("short_name", "").upper():
-                self.logger.info(f"Found exact bank match: {bank.get('short_name')}")
+                self.logger.info(
+                    f"Found exact bank match: {bank.get('short_name')}"
+                )
                 return bank
-                
+
         # If not found by short_name, try more flexible matching
         for bank in self.banks_data:
             bank_full_name = bank.get("name", "").upper()
             short_name = bank.get("short_name", "").upper()
-            
-            if bank_name_upper in bank_full_name or bank_name_upper in short_name:
-                self.logger.info(f"Found partial bank match: {bank.get('short_name')}")
+
+            if (
+                bank_name_upper in bank_full_name
+                or bank_name_upper in short_name
+            ):
+                self.logger.info(
+                    f"Found partial bank match: {bank.get('short_name')}"
+                )
                 return bank
-                
-        self.logger.warning(f"Could not find bank information for '{bank_name}'")
+
+        self.logger.warning(
+            f"Could not find bank information for '{bank_name}'"
+        )
         return None
-        
+
     def set_bank_from_filename(self, filename: str) -> bool:
         """Set current bank based on filename pattern (e.g., 'BIDV 3840.ods')"""
         if not filename:
@@ -342,10 +353,14 @@ class IntegratedBankProcessor:
         if bank_info:
             self.current_bank_name = bank_info.get("short_name", "")
             self.current_bank_info = bank_info
-            self.logger.info(f"Set current bank to {self.current_bank_name} from filename")
+            self.logger.info(
+                f"Set current bank to {self.current_bank_name} from filename"
+            )
             return True
 
-        self.logger.warning(f"Could not match bank name '{potential_bank_name}' from filename")
+        self.logger.warning(
+            f"Could not match bank name '{potential_bank_name}' from filename"
+        )
         return False
 
     def connect(self) -> bool:
@@ -912,6 +927,51 @@ class IntegratedBankProcessor:
             f"Checking special accounts for: '{description}' -> '{normalized_desc}'"
         )
 
+        # ENHANCED LOGIC: Special handling for "Phí cà thẻ" (Card fee)
+        normalized_phi_ca_the = self._normalize_vietnamese_text("Phí cà thẻ")
+        if normalized_phi_ca_the in normalized_desc:
+            self.logger.info(
+                f"Found 'Phí cà thẻ' in description: '{description}'"
+            )
+
+            # Use the same special account as interest payment (Thanh toan lai)
+            special_account = self.special_account_mappings.get(
+                "Thanh toan lai", "5154"
+            )
+
+            # Check that the account exists in our system
+            account_match = self.find_account_by_code(special_account)
+            if not account_match:
+                self.logger.warning(
+                    f"Special account {special_account} for 'Phí cà thẻ' not found in database. Falling back to normal logic."
+                )
+            else:
+                # Apply the same logic as interest payment based on document type
+                if document_type == "BC":  # Receipt/Credit transaction
+                    # For receipts: money comes into bank, special account is credited
+                    debit_account = self.default_bank_account
+                    credit_account = special_account
+
+                    # Store information about this being a special payment (same as interest payment)
+                    # This will cause process_transaction to use the bank info from filename
+                    self._current_transaction_is_interest_payment = True
+                    self.logger.info(
+                        "Set card fee transaction to use bank info from filename"
+                    )
+                    return debit_account, credit_account
+                else:  # BN - Payment/Debit transaction
+                    # For payments: money goes out of bank, special account is debited
+                    debit_account = special_account
+                    credit_account = self.default_bank_account
+
+                    # Store information about this being a special payment (same as interest payment)
+                    # This will cause process_transaction to use the bank info from filename
+                    self._current_transaction_is_interest_payment = True
+                    self.logger.info(
+                        "Set card fee transaction to use bank info from filename"
+                    )
+                    return debit_account, credit_account
+
         # ENHANCED LOGIC: Special handling for "Thanh toan lai" (Interest payment)
         normalized_thanh_toan_lai = self._normalize_vietnamese_text(
             "Thanh toan lai"
@@ -943,9 +1003,14 @@ class IntegratedBankProcessor:
                     bank_info_str = ""
                     if self.current_bank_name:
                         bank_info_str = f" - {self.current_bank_name}"
-                        if self.current_bank_info and self.current_bank_info.get("address"):
-                            bank_info_str += f" ({self.current_bank_info.get('address')})"
-                    
+                        if (
+                            self.current_bank_info
+                            and self.current_bank_info.get("address")
+                        ):
+                            bank_info_str += (
+                                f" ({self.current_bank_info.get('address')})"
+                            )
+
                     self.logger.info(
                         f"Enhanced 'Thanh toan lai' mapping (Receipt): Dr={debit_account} (bank), Cr={credit_account} (interest){bank_info_str}"
                     )
@@ -962,9 +1027,14 @@ class IntegratedBankProcessor:
                     bank_info_str = ""
                     if self.current_bank_name:
                         bank_info_str = f" - {self.current_bank_name}"
-                        if self.current_bank_info and self.current_bank_info.get("address"):
-                            bank_info_str += f" ({self.current_bank_info.get('address')})"
-                    
+                        if (
+                            self.current_bank_info
+                            and self.current_bank_info.get("address")
+                        ):
+                            bank_info_str += (
+                                f" ({self.current_bank_info.get('address')})"
+                            )
+
                     self.logger.info(
                         f"Enhanced 'Thanh toan lai' mapping (Payment): Dr={debit_account} (interest), Cr={credit_account} (bank){bank_info_str}"
                     )
@@ -1729,14 +1799,22 @@ class IntegratedBankProcessor:
                     # Get full bank info from current_bank_info
                     bank_address = self.current_bank_info.get("address", "")
                     bank_code = self.current_bank_info.get("code", "")
-                    
+
                     # Set counterparty code to bank code from _banks.json
                     if bank_code:
-                        counterparty_code = str(bank_code)  # Make sure it's a string
-                        self.logger.info(f"Setting counterparty code to bank code: {counterparty_code}")
+                        counterparty_code = str(
+                            bank_code
+                        )  # Make sure it's a string
+                        self.logger.info(
+                            f"Setting counterparty code to bank code: {counterparty_code}"
+                        )
                     else:
-                        counterparty_code = "BANK-" + bank_name if bank_name else counterparty_code
-                            
+                        counterparty_code = (
+                            "BANK-" + bank_name
+                            if bank_name
+                            else counterparty_code
+                        )
+
                     if rule.document_type == "BN":  # Payment
                         description = f"Thanh toán lãi tiền vay {bank_name}"
                         if bank_address:
@@ -1747,7 +1825,10 @@ class IntegratedBankProcessor:
                             description += f" - {bank_address}"
 
                     # Override counterparty with bank info
-                    counterparty_name = self.current_bank_info.get("name", bank_name) or counterparty_name
+                    counterparty_name = (
+                        self.current_bank_info.get("name", bank_name)
+                        or counterparty_name
+                    )
                     address = bank_address or address
 
                     self.logger.info(
@@ -1772,6 +1853,7 @@ class IntegratedBankProcessor:
                 # POS machine transactions get formatted descriptions based on document type
                 if rule.document_type == "BN":
                     # BN: POS machine payments = Card fee transaction
+                    # Set up description with "Phí cà thẻ..."
                     if pos_name:
                         if department_code:
                             description = (
@@ -1786,9 +1868,45 @@ class IntegratedBankProcessor:
                             )
                         else:
                             description = f"Phí cà thẻ POS {pos_code}"
-                    self.logger.info(
-                        f"Applied POS machine BN logic: {description}"
-                    )
+
+                    # For BN POS transactions ("Phí cà thẻ..."), use bank info from filename as counterparty
+                    # Similar to "Thanh toan lai" statements
+                    bank_name = self.current_bank_name
+                    if bank_name:
+                        # Get full bank info from current_bank_info
+                        bank_address = self.current_bank_info.get("address", "")
+                        bank_code = self.current_bank_info.get("code", "")
+
+                        # Set counterparty code to bank code from _banks.json
+                        if bank_code:
+                            counterparty_code = str(
+                                bank_code
+                            )  # Make sure it's a string
+                            self.logger.info(
+                                f"Setting POS card fee counterparty code to bank code: {counterparty_code}"
+                            )
+                        else:
+                            counterparty_code = (
+                                "BANK-" + bank_name
+                                if bank_name
+                                else counterparty_code
+                            )
+
+                        # Override counterparty with bank info
+                        counterparty_name = (
+                            self.current_bank_info.get("name", bank_name)
+                            or counterparty_name
+                        )
+                        address = bank_address or address
+
+                        self.logger.info(
+                            f"Applied enhanced 'Phí cà thẻ' logic with bank info from filename: {description}\n"
+                            f"Counterparty Code: {counterparty_code}, Counterparty Name: {counterparty_name}"
+                        )
+                    else:
+                        self.logger.info(
+                            f"Applied standard POS machine BN logic: {description}"
+                        )
                 else:
                     # BC: POS machine receipts = Sales transaction
                     if pos_name:
