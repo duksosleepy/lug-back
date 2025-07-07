@@ -6,8 +6,11 @@ import asyncio
 
 import httpx
 from celery import Celery
+from celery.schedules import crontab
 from loguru import logger
 
+# Move imports to module level
+from src.sapo_sync import SapoSyncRequest, sync_mysapo, sync_mysapogo
 from src.settings import app_settings
 from src.util.phone_utils import format_phone_number
 
@@ -34,10 +37,7 @@ celery_app.conf.update(
         },
         "daily-sapo-sync": {
             "task": "tasks.worker.daily_sapo_sync",
-            "schedule": {
-                "hour": "0",
-                "minute": "30",
-            },  # Chạy vào 00:30 AM mỗi ngày
+            "schedule": crontab(hour=0, minute=30),
             "args": (),
         },
     },
@@ -47,6 +47,8 @@ celery_app.conf.update(
     enable_utc=True,
     timezone="Asia/Ho_Chi_Minh",
     worker_concurrency=4,
+    task_time_limit=1800,  # 30 minutes
+    task_soft_time_limit=1500,  # 25 minutes
 )
 
 
@@ -215,18 +217,78 @@ def add_to_warranty_tracking(
     return True
 
 
-# === PHẦN 3: TASK ĐỒNG BỘ CHÍNH ===
+# === PHẦN 3: HELPER FUNCTION FOR ASYNC SYNC ===
+
+
+def run_async_sync(start_date: str, end_date: str) -> dict:
+    """
+    Helper function to run async sync functions in a synchronous context.
+    This function creates a new event loop to run the async tasks.
+
+    Args:
+        start_date (str): Start date in YYYY-MM-DD format
+        end_date (str): End date in YYYY-MM-DD format
+
+    Returns:
+        dict: Results from both sync operations
+    """
+
+    async def _run_sync():
+        """Internal async function to run both sync operations."""
+        try:
+            # Create request data
+            request_data = SapoSyncRequest(
+                startDate=start_date, endDate=end_date
+            )
+
+            # Run both sync operations concurrently
+            mysapo_task = sync_mysapo(
+                request_data.startDate, request_data.endDate
+            )
+            mysapogo_task = sync_mysapogo(
+                request_data.startDate, request_data.endDate
+            )
+
+            # Wait for both tasks to complete
+            mysapo_result, mysapogo_result = await asyncio.gather(
+                mysapo_task, mysapogo_task
+            )
+
+            return mysapo_result, mysapogo_result
+
+        except Exception as e:
+            logger.error(
+                f"Error in async sync operations: {str(e)}", exc_info=True
+            )
+            raise
+
+    # Check if there's already an event loop running
+    try:
+        loop = asyncio.get_running_loop()
+        # If we're in an async context, we need to use a different approach
+        logger.warning(
+            "Already in async context, using asyncio.run_coroutine_threadsafe"
+        )
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(asyncio.run, _run_sync())
+            return future.result(timeout=1800)  # 30 minute timeout
+    except RuntimeError:
+        # No event loop running, safe to use asyncio.run
+        return asyncio.run(_run_sync())
+
+
+# === PHẦN 4: TASK ĐỒNG BỘ CHÍNH ===
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
-async def daily_sapo_sync(self):
+def daily_sapo_sync(self):  # ✅ FIXED: Removed async keyword
     """
     Task chạy hàng ngày vào 00:30 AM để đồng bộ dữ liệu từ Sapo APIs.
     Đồng bộ từ ngày 31/12 của năm trước đến ngày hiện tại.
     """
     from datetime import datetime
-
-    from sapo_sync import SapoSyncRequest, sync_mysapo, sync_mysapogo
 
     try:
         # Lấy ngày 31/12 của năm trước và ngày hiện tại để đồng bộ (format: YYYY-MM-DD)
@@ -238,19 +300,8 @@ async def daily_sapo_sync(self):
             f"Bắt đầu đồng bộ Sapo hàng ngày từ {start_date} đến {end_date}"
         )
 
-        # Tạo request data
-        request_data = SapoSyncRequest(startDate=start_date, endDate=end_date)
-
-        # Gọi các hàm đồng bộ đồng thời
-        mysapo_task = sync_mysapo(request_data.startDate, request_data.endDate)
-        mysapogo_task = sync_mysapogo(
-            request_data.startDate, request_data.endDate
-        )
-
-        # Đợi cả hai task hoàn thành
-        mysapo_result, mysapogo_result = await asyncio.gather(
-            mysapo_task, mysapogo_task
-        )
+        # ✅ FIXED: Use helper function to run async operations
+        mysapo_result, mysapogo_result = run_async_sync(start_date, end_date)
 
         total_orders_processed = mysapo_result.get(
             "orders_processed", 0
