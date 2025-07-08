@@ -27,22 +27,22 @@ def index_counterparties(file_path="danhmucdoituong.xls", sheet_name=None):
         os.makedirs(index_path, exist_ok=True)
         logger.info(f"Using index directory: {index_path}")
 
-        # Check available sheets if sheet_name not specified
-        if sheet_name is None:
-            try:
-                xl_file = pd.ExcelFile(file_path)
-                sheet_names = xl_file.sheet_names
-                logger.info(f"Available sheets in {file_path}: {sheet_names}")
-                if len(sheet_names) > 1:
-                    logger.warning(
-                        f"Multiple sheets found: {sheet_names}. Using first sheet."
-                    )
-                sheet_name = 0  # Use first sheet by default
-            except Exception as e:
-                logger.error(f"Error reading sheet names from {file_path}: {e}")
-                return False
+        # Get available sheets
+        try:
+            xl_file = pd.ExcelFile(file_path)
+            sheet_names = xl_file.sheet_names
+            logger.info(f"Available sheets in {file_path}: {sheet_names}")
 
-        logger.info(f"Reading from sheet: {sheet_name}")
+            # Process specific sheet if provided, otherwise process all sheets
+            if sheet_name is not None:
+                sheets_to_process = [sheet_name]
+                logger.info(f"Processing specified sheet: {sheet_name}")
+            else:
+                sheets_to_process = sheet_names
+                logger.info(f"Processing all {len(sheet_names)} sheets")
+        except Exception as e:
+            logger.error(f"Error reading sheet names from {file_path}: {e}")
+            return False
 
         # Create schema with field names matching the database schema (in English)
         schema_builder = SchemaBuilder()
@@ -105,59 +105,89 @@ def index_counterparties(file_path="danhmucdoituong.xls", sheet_name=None):
         # Register the analyzer
         index.register_tokenizer("vietnamese_normalized", vietnamese_analyzer)
 
-        # Read Excel file
-        df = pd.read_excel(file_path, sheet_name=sheet_name)
-
-        # Log DataFrame info for debugging
-        logger.info(f"DataFrame shape: {df.shape}")
-        logger.info(f"DataFrame columns: {list(df.columns)}")
-
-        # Fill NA values
-        df.fillna(
-            {col: "" if df[col].dtype == "object" else 0 for col in df.columns},
-            inplace=True,
-        )
-
         # Create a writer for the index
         writer = index.writer()
 
-        # Document count
-        doc_count = 0
+        # Track total documents across all sheets
+        total_doc_count = 0
+        processed_sheets = 0
+        failed_sheets = 0
 
-        # Process each row in the DataFrame
-        for _, row in df.iterrows():
+        # Process each sheet
+        for current_sheet in sheets_to_process:
             try:
-                party_type = int(row.get("Loai_Dt", 0))
-            except (ValueError, TypeError):
-                party_type = 0
+                logger.info(f"Processing sheet: {current_sheet}")
 
-            doc_dict = {
-                "code": str(row.get("Ma_Dt", "")),
-                "name": str(row.get("Ten_Dt", "")),
-                "contact_person": str(row.get("Ong_Ba", "")),
-                "position": str(row.get("Chuc_Vu", "")),
-                "group_code": str(row.get("Ma_Nh_Dt", "")),
-                "type": str(party_type),
-                "region_code": str(row.get("Ma_Kv", "")),
-                "address": str(row.get("Dia_Chi", "")),
-                "phone": str(row.get("So_Phone", "")),
-                "fax": str(row.get("So_Fax", "")),
-                "tax_id": str(row.get("Ma_So_Thue", "")),
-                "bank_account": str(row.get("So_Tk_NH", "")),
-                "bank_name": str(row.get("Ten_NH", "")),
-                "city": str(row.get("Ten_Tp", "")),
-            }
+                # Read Excel file for current sheet
+                df = pd.read_excel(file_path, sheet_name=current_sheet)
 
-            # Add document to the index
-            writer.add_document(Document.from_dict(doc_dict))
-            doc_count += 1
+                # Log DataFrame info for debugging
+                logger.info(
+                    f"Sheet '{current_sheet}' - DataFrame shape: {df.shape}"
+                )
+                logger.info(
+                    f"Sheet '{current_sheet}' - DataFrame columns: {list(df.columns)}"
+                )
+
+                # Fill NA values
+                df.fillna(
+                    {
+                        col: "" if df[col].dtype == "object" else 0
+                        for col in df.columns
+                    },
+                    inplace=True,
+                )
+
+                # Document count for this sheet
+                sheet_doc_count = 0
+
+                # Process each row in the DataFrame
+                for _, row in df.iterrows():
+                    try:
+                        party_type = int(row.get("Loai_Dt", 0))
+                    except (ValueError, TypeError):
+                        party_type = 0
+
+                    doc_dict = {
+                        "code": str(row.get("Ma_Dt", "")),
+                        "name": str(row.get("Ten_Dt", "")),
+                        "contact_person": str(row.get("Ong_Ba", "")),
+                        "position": str(row.get("Chuc_Vu", "")),
+                        "group_code": str(row.get("Ma_Nh_Dt", "")),
+                        "type": str(party_type),
+                        "region_code": str(row.get("Ma_Kv", "")),
+                        "address": str(row.get("Dia_Chi", "")),
+                        "phone": str(row.get("So_Phone", "")),
+                        "fax": str(row.get("So_Fax", "")),
+                        "tax_id": str(row.get("Ma_So_Thue", "")),
+                        "bank_account": str(row.get("So_Tk_NH", "")),
+                        "bank_name": str(row.get("Ten_NH", "")),
+                        "city": str(row.get("Ten_Tp", "")),
+                    }
+
+                    # Add document to the index
+                    writer.add_document(Document.from_dict(doc_dict))
+                    sheet_doc_count += 1
+                    total_doc_count += 1
+
+                logger.info(
+                    f"Added {sheet_doc_count} counterparties from sheet '{current_sheet}'"
+                )
+                processed_sheets += 1
+
+            except Exception as e:
+                logger.error(f"Error processing sheet '{current_sheet}': {e}")
+                failed_sheets += 1
+                continue
 
         # Commit changes to the index
         writer.commit()
         writer.wait_merging_threads()
 
-        logger.info(f"Added {doc_count} counterparties to the index")
-        return True
+        logger.info(
+            f"Completed processing: {total_doc_count} total counterparties from {processed_sheets} sheets ({failed_sheets} failed)"
+        )
+        return processed_sheets > 0
 
     except Exception as e:
         logger.error(f"Error importing counterparties: {e}")
@@ -174,22 +204,22 @@ def index_accounts(file_path="danhmuctaikhoan.xls", sheet_name=None):
         os.makedirs(index_path, exist_ok=True)
         logger.info(f"Using index directory: {index_path}")
 
-        # Check available sheets if sheet_name not specified
-        if sheet_name is None:
-            try:
-                xl_file = pd.ExcelFile(file_path)
-                sheet_names = xl_file.sheet_names
-                logger.info(f"Available sheets in {file_path}: {sheet_names}")
-                if len(sheet_names) > 1:
-                    logger.warning(
-                        f"Multiple sheets found: {sheet_names}. Using first sheet."
-                    )
-                sheet_name = 0  # Use first sheet by default
-            except Exception as e:
-                logger.error(f"Error reading sheet names from {file_path}: {e}")
-                return False
+        # Get available sheets
+        try:
+            xl_file = pd.ExcelFile(file_path)
+            sheet_names = xl_file.sheet_names
+            logger.info(f"Available sheets in {file_path}: {sheet_names}")
 
-        logger.info(f"Reading from sheet: {sheet_name}")
+            # Process specific sheet if provided, otherwise process all sheets
+            if sheet_name is not None:
+                sheets_to_process = [sheet_name]
+                logger.info(f"Processing specified sheet: {sheet_name}")
+            else:
+                sheets_to_process = sheet_names
+                logger.info(f"Processing all {len(sheet_names)} sheets")
+        except Exception as e:
+            logger.error(f"Error reading sheet names from {file_path}: {e}")
+            return False
 
         # Create schema based on accounts table structure
         schema_builder = SchemaBuilder()
@@ -224,52 +254,84 @@ def index_accounts(file_path="danhmuctaikhoan.xls", sheet_name=None):
         # Register the analyzer
         index.register_tokenizer("vietnamese_normalized", vietnamese_analyzer)
 
-        # Read Excel file
-        df = pd.read_excel(file_path, sheet_name=sheet_name)
-
-        # Log DataFrame info for debugging
-        logger.info(f"DataFrame shape: {df.shape}")
-        logger.info(f"DataFrame columns: {list(df.columns)}")
-
-        # Fill NA values
-        df.fillna(
-            {col: "" if df[col].dtype == "object" else 0 for col in df.columns},
-            inplace=True,
-        )
-
         # Create a writer for the index
         writer = index.writer()
 
-        # Document count
-        doc_count = 0
+        # Track total documents across all sheets
+        total_doc_count = 0
+        processed_sheets = 0
+        failed_sheets = 0
 
-        # Process each row in the DataFrame
-        for _, row in df.iterrows():
-            # Determine if the account is a detail account
-            is_detail = (
-                1 if str(row.get("Tk_Cuoi", "")).lower() == "true" else 0
-            )
+        # Process each sheet
+        for current_sheet in sheets_to_process:
+            try:
+                logger.info(f"Processing sheet: {current_sheet}")
 
-            # Create document with fields matching database schema
-            doc_dict = {
-                "code": str(row.get("Tk", "")),
-                "name": str(row.get("Ten_Tk", "")),
-                "name_english": str(row.get("Ten_TkE", "")),
-                "parent_code": str(row.get("Tk_Cha", "") or ""),
-                "is_detail": str(is_detail),
-            }
+                # Read Excel file for current sheet
+                df = pd.read_excel(file_path, sheet_name=current_sheet)
 
-            # Only add document if it has a code
-            if doc_dict["code"]:
-                writer.add_document(Document.from_dict(doc_dict))
-                doc_count += 1
+                # Log DataFrame info for debugging
+                logger.info(
+                    f"Sheet '{current_sheet}' - DataFrame shape: {df.shape}"
+                )
+                logger.info(
+                    f"Sheet '{current_sheet}' - DataFrame columns: {list(df.columns)}"
+                )
+
+                # Fill NA values
+                df.fillna(
+                    {
+                        col: "" if df[col].dtype == "object" else 0
+                        for col in df.columns
+                    },
+                    inplace=True,
+                )
+
+                # Document count for this sheet
+                sheet_doc_count = 0
+
+                # Process each row in the DataFrame
+                for _, row in df.iterrows():
+                    # Determine if the account is a detail account
+                    is_detail = (
+                        1
+                        if str(row.get("Tk_Cuoi", "")).lower() == "true"
+                        else 0
+                    )
+
+                    # Create document with fields matching database schema
+                    doc_dict = {
+                        "code": str(row.get("Tk", "")),
+                        "name": str(row.get("Ten_Tk", "")),
+                        "name_english": str(row.get("Ten_TkE", "")),
+                        "parent_code": str(row.get("Tk_Cha", "") or ""),
+                        "is_detail": str(is_detail),
+                    }
+
+                    # Only add document if it has a code
+                    if doc_dict["code"]:
+                        writer.add_document(Document.from_dict(doc_dict))
+                        sheet_doc_count += 1
+                        total_doc_count += 1
+
+                logger.info(
+                    f"Added {sheet_doc_count} accounts from sheet '{current_sheet}'"
+                )
+                processed_sheets += 1
+
+            except Exception as e:
+                logger.error(f"Error processing sheet '{current_sheet}': {e}")
+                failed_sheets += 1
+                continue
 
         # Commit changes to the index
         writer.commit()
         writer.wait_merging_threads()
 
-        logger.info(f"Added {doc_count} accounts to the index")
-        return True
+        logger.info(
+            f"Completed processing: {total_doc_count} total accounts from {processed_sheets} sheets ({failed_sheets} failed)"
+        )
+        return processed_sheets > 0
 
     except Exception as e:
         logger.error(f"Error importing accounts: {e}")
@@ -286,22 +348,22 @@ def index_departments(file_path="danhmucbophan.xls", sheet_name=None):
         os.makedirs(index_path, exist_ok=True)
         logger.info(f"Using index directory: {index_path}")
 
-        # Check available sheets if sheet_name not specified
-        if sheet_name is None:
-            try:
-                xl_file = pd.ExcelFile(file_path)
-                sheet_names = xl_file.sheet_names
-                logger.info(f"Available sheets in {file_path}: {sheet_names}")
-                if len(sheet_names) > 1:
-                    logger.warning(
-                        f"Multiple sheets found: {sheet_names}. Using first sheet."
-                    )
-                sheet_name = 0  # Use first sheet by default
-            except Exception as e:
-                logger.error(f"Error reading sheet names from {file_path}: {e}")
-                return False
+        # Get available sheets
+        try:
+            xl_file = pd.ExcelFile(file_path)
+            sheet_names = xl_file.sheet_names
+            logger.info(f"Available sheets in {file_path}: {sheet_names}")
 
-        logger.info(f"Reading from sheet: {sheet_name}")
+            # Process specific sheet if provided, otherwise process all sheets
+            if sheet_name is not None:
+                sheets_to_process = [sheet_name]
+                logger.info(f"Processing specified sheet: {sheet_name}")
+            else:
+                sheets_to_process = sheet_names
+                logger.info(f"Processing all {len(sheet_names)} sheets")
+        except Exception as e:
+            logger.error(f"Error reading sheet names from {file_path}: {e}")
+            return False
 
         # Create schema based on departments table structure
         schema_builder = SchemaBuilder()
@@ -336,50 +398,82 @@ def index_departments(file_path="danhmucbophan.xls", sheet_name=None):
         # Register the analyzer
         index.register_tokenizer("vietnamese_normalized", vietnamese_analyzer)
 
-        # Read Excel file
-        df = pd.read_excel(file_path, sheet_name=sheet_name)
-
-        # Log DataFrame info for debugging
-        logger.info(f"DataFrame shape: {df.shape}")
-        logger.info(f"DataFrame columns: {list(df.columns)}")
-
-        # Fill NA values
-        df.fillna(
-            {col: "" if df[col].dtype == "object" else 0 for col in df.columns},
-            inplace=True,
-        )
-
         # Create a writer for the index
         writer = index.writer()
 
-        # Document count
-        doc_count = 0
+        # Track total documents across all sheets
+        total_doc_count = 0
+        processed_sheets = 0
+        failed_sheets = 0
 
-        # Process each row in the DataFrame
-        for _, row in df.iterrows():
-            is_detail = (
-                1 if str(row.get("Nh_Cuoi", "")).lower() == "true" else 0
-            )
+        # Process each sheet
+        for current_sheet in sheets_to_process:
+            try:
+                logger.info(f"Processing sheet: {current_sheet}")
 
-            doc_dict = {
-                "code": str(row.get("Ma_Bp", "")),
-                "name": str(row.get("Ten_Bp", "")),
-                "parent_code": str(row.get("Ma_Bp_Cha", "") or ""),
-                "is_detail": str(is_detail),
-                "data_source": str(row.get("Ma_Data", "")),
-            }
+                # Read Excel file for current sheet
+                df = pd.read_excel(file_path, sheet_name=current_sheet)
 
-            # Only add document if it has a code
-            if doc_dict["code"]:
-                writer.add_document(Document.from_dict(doc_dict))
-                doc_count += 1
+                # Log DataFrame info for debugging
+                logger.info(
+                    f"Sheet '{current_sheet}' - DataFrame shape: {df.shape}"
+                )
+                logger.info(
+                    f"Sheet '{current_sheet}' - DataFrame columns: {list(df.columns)}"
+                )
+
+                # Fill NA values
+                df.fillna(
+                    {
+                        col: "" if df[col].dtype == "object" else 0
+                        for col in df.columns
+                    },
+                    inplace=True,
+                )
+
+                # Document count for this sheet
+                sheet_doc_count = 0
+
+                # Process each row in the DataFrame
+                for _, row in df.iterrows():
+                    is_detail = (
+                        1
+                        if str(row.get("Nh_Cuoi", "")).lower() == "true"
+                        else 0
+                    )
+
+                    doc_dict = {
+                        "code": str(row.get("Ma_Bp", "")),
+                        "name": str(row.get("Ten_Bp", "")),
+                        "parent_code": str(row.get("Ma_Bp_Cha", "") or ""),
+                        "is_detail": str(is_detail),
+                        "data_source": str(row.get("Ma_Data", "")),
+                    }
+
+                    # Only add document if it has a code
+                    if doc_dict["code"]:
+                        writer.add_document(Document.from_dict(doc_dict))
+                        sheet_doc_count += 1
+                        total_doc_count += 1
+
+                logger.info(
+                    f"Added {sheet_doc_count} departments from sheet '{current_sheet}'"
+                )
+                processed_sheets += 1
+
+            except Exception as e:
+                logger.error(f"Error processing sheet '{current_sheet}': {e}")
+                failed_sheets += 1
+                continue
 
         # Commit changes to the index
         writer.commit()
         writer.wait_merging_threads()
 
-        logger.info(f"Added {doc_count} departments to the index")
-        return True
+        logger.info(
+            f"Completed processing: {total_doc_count} total departments from {processed_sheets} sheets ({failed_sheets} failed)"
+        )
+        return processed_sheets > 0
 
     except Exception as e:
         logger.error(f"Error importing departments: {e}")
@@ -396,22 +490,22 @@ def index_cost_categories(file_path="danhmuckhoanmuc.xls", sheet_name=None):
         os.makedirs(index_path, exist_ok=True)
         logger.info(f"Using index directory: {index_path}")
 
-        # Check available sheets if sheet_name not specified
-        if sheet_name is None:
-            try:
-                xl_file = pd.ExcelFile(file_path)
-                sheet_names = xl_file.sheet_names
-                logger.info(f"Available sheets in {file_path}: {sheet_names}")
-                if len(sheet_names) > 1:
-                    logger.warning(
-                        f"Multiple sheets found: {sheet_names}. Using first sheet."
-                    )
-                sheet_name = 0  # Use first sheet by default
-            except Exception as e:
-                logger.error(f"Error reading sheet names from {file_path}: {e}")
-                return False
+        # Get available sheets
+        try:
+            xl_file = pd.ExcelFile(file_path)
+            sheet_names = xl_file.sheet_names
+            logger.info(f"Available sheets in {file_path}: {sheet_names}")
 
-        logger.info(f"Reading from sheet: {sheet_name}")
+            # Process specific sheet if provided, otherwise process all sheets
+            if sheet_name is not None:
+                sheets_to_process = [sheet_name]
+                logger.info(f"Processing specified sheet: {sheet_name}")
+            else:
+                sheets_to_process = sheet_names
+                logger.info(f"Processing all {len(sheet_names)} sheets")
+        except Exception as e:
+            logger.error(f"Error reading sheet names from {file_path}: {e}")
+            return False
 
         # Create schema based on cost_categories table structure
         schema_builder = SchemaBuilder()
@@ -440,44 +534,74 @@ def index_cost_categories(file_path="danhmuckhoanmuc.xls", sheet_name=None):
         # Register the analyzer
         index.register_tokenizer("vietnamese_normalized", vietnamese_analyzer)
 
-        # Read Excel file
-        df = pd.read_excel(file_path, sheet_name=sheet_name)
-
-        # Log DataFrame info for debugging
-        logger.info(f"DataFrame shape: {df.shape}")
-        logger.info(f"DataFrame columns: {list(df.columns)}")
-
-        # Fill NA values
-        df.fillna(
-            {col: "" if df[col].dtype == "object" else 0 for col in df.columns},
-            inplace=True,
-        )
-
         # Create a writer for the index
         writer = index.writer()
 
-        # Document count
-        doc_count = 0
+        # Track total documents across all sheets
+        total_doc_count = 0
+        processed_sheets = 0
+        failed_sheets = 0
 
-        # Process each row in the DataFrame
-        for _, row in df.iterrows():
-            doc_dict = {
-                "code": str(row.get("Ma_Km", "")),
-                "name": str(row.get("Ten_Km", "")),
-                "data_source": str(row.get("Ma_Data", "")),
-            }
+        # Process each sheet
+        for current_sheet in sheets_to_process:
+            try:
+                logger.info(f"Processing sheet: {current_sheet}")
 
-            # Only add document if it has a code
-            if doc_dict["code"]:
-                writer.add_document(Document.from_dict(doc_dict))
-                doc_count += 1
+                # Read Excel file for current sheet
+                df = pd.read_excel(file_path, sheet_name=current_sheet)
+
+                # Log DataFrame info for debugging
+                logger.info(
+                    f"Sheet '{current_sheet}' - DataFrame shape: {df.shape}"
+                )
+                logger.info(
+                    f"Sheet '{current_sheet}' - DataFrame columns: {list(df.columns)}"
+                )
+
+                # Fill NA values
+                df.fillna(
+                    {
+                        col: "" if df[col].dtype == "object" else 0
+                        for col in df.columns
+                    },
+                    inplace=True,
+                )
+
+                # Document count for this sheet
+                sheet_doc_count = 0
+
+                # Process each row in the DataFrame
+                for _, row in df.iterrows():
+                    doc_dict = {
+                        "code": str(row.get("Ma_Km", "")),
+                        "name": str(row.get("Ten_Km", "")),
+                        "data_source": str(row.get("Ma_Data", "")),
+                    }
+
+                    # Only add document if it has a code
+                    if doc_dict["code"]:
+                        writer.add_document(Document.from_dict(doc_dict))
+                        sheet_doc_count += 1
+                        total_doc_count += 1
+
+                logger.info(
+                    f"Added {sheet_doc_count} cost categories from sheet '{current_sheet}'"
+                )
+                processed_sheets += 1
+
+            except Exception as e:
+                logger.error(f"Error processing sheet '{current_sheet}': {e}")
+                failed_sheets += 1
+                continue
 
         # Commit changes to the index
         writer.commit()
         writer.wait_merging_threads()
 
-        logger.info(f"Added {doc_count} cost categories to the index")
-        return True
+        logger.info(
+            f"Completed processing: {total_doc_count} total cost categories from {processed_sheets} sheets ({failed_sheets} failed)"
+        )
+        return processed_sheets > 0
 
     except Exception as e:
         logger.error(f"Error importing cost categories: {e}")
@@ -494,22 +618,22 @@ def index_pos_machines(file_path="danhmucmaypos.xlsx", sheet_name=None):
         os.makedirs(index_path, exist_ok=True)
         logger.info(f"Using index directory: {index_path}")
 
-        # Check available sheets if sheet_name not specified
-        if sheet_name is None:
-            try:
-                xl_file = pd.ExcelFile(file_path)
-                sheet_names = xl_file.sheet_names
-                logger.info(f"Available sheets in {file_path}: {sheet_names}")
-                if len(sheet_names) > 1:
-                    logger.warning(
-                        f"Multiple sheets found: {sheet_names}. Using first sheet."
-                    )
-                sheet_name = 0  # Use first sheet by default
-            except Exception as e:
-                logger.error(f"Error reading sheet names from {file_path}: {e}")
-                return False
+        # Get available sheets
+        try:
+            xl_file = pd.ExcelFile(file_path)
+            sheet_names = xl_file.sheet_names
+            logger.info(f"Available sheets in {file_path}: {sheet_names}")
 
-        logger.info(f"Reading from sheet: {sheet_name}")
+            # Process specific sheet if provided, otherwise process all sheets
+            if sheet_name is not None:
+                sheets_to_process = [sheet_name]
+                logger.info(f"Processing specified sheet: {sheet_name}")
+            else:
+                sheets_to_process = sheet_names
+                logger.info(f"Processing all {len(sheet_names)} sheets")
+        except Exception as e:
+            logger.error(f"Error reading sheet names from {file_path}: {e}")
+            return False
 
         # Create schema based on pos_machines table structure
         schema_builder = SchemaBuilder()
@@ -554,163 +678,204 @@ def index_pos_machines(file_path="danhmucmaypos.xlsx", sheet_name=None):
         # Register the analyzer
         index.register_tokenizer("vietnamese_normalized", vietnamese_analyzer)
 
-        # Read Excel file
-        df = pd.read_excel(file_path, sheet_name=sheet_name)
-
-        # Log DataFrame info for debugging
-        logger.info(f"DataFrame shape: {df.shape}")
-        logger.info(f"DataFrame columns: {list(df.columns)}")
-
-        # Fill NA values
-        df.fillna(
-            {col: "" if df[col].dtype == "object" else 0 for col in df.columns},
-            inplace=True,
-        )
-
         # Create a writer for the index
         writer = index.writer()
 
-        # Document count
-        doc_count = 0
-        skipped_empty = 0
+        # Track total documents across all sheets
+        total_doc_count = 0
+        total_skipped_empty = 0
+        processed_sheets = 0
+        failed_sheets = 0
 
-        # Process each row in the DataFrame
-        for _, row in df.iterrows():
-            # Try multiple possible column name variations
-            code_col = next(
-                (
-                    col
-                    for col in [
-                        "Mã TIP",
-                        "Ma_TIP",
-                        "MÃ TIP",
-                        "MA_TIP",
-                        "Mã POS",
-                        "Ma_POS",
-                    ]
-                    if col in row.index
-                ),
-                None,
-            )
-            dept_col = next(
-                (
-                    col
-                    for col in [
-                        "Mã đối tượng",
-                        "Ma_Dt",
-                        "MÃ ĐỐI TƯỢNG",
-                        "MA_DT",
-                        "Mã BP",
-                        "Ma_BP",
-                    ]
-                    if col in row.index
-                ),
-                None,
-            )
-            name_col = next(
-                (
-                    col
-                    for col in [
-                        "Tên",
-                        "Ten",
-                        "TÊN",
-                        "TEN",
-                        "Tên POS",
-                        "Ten_POS",
-                    ]
-                    if col in row.index
-                ),
-                None,
-            )
-            addr_col = next(
-                (
-                    col
-                    for col in ["Địa chỉ", "Dia_Chi", "ĐỊA CHỈ", "DIA_CHI"]
-                    if col in row.index
-                ),
-                None,
-            )
-            holder_col = next(
-                (
-                    col
-                    for col in [
-                        "CHỦ TÀI KHOẢN",
-                        "Chu_TK",
-                        "CHU TAI KHOAN",
-                        "CHU_TK",
-                        "Chủ TK",
-                    ]
-                    if col in row.index
-                ),
-                None,
-            )
-            account_col = next(
-                (
-                    col
-                    for col in [
-                        "TK THỤ HƯỞNG",
-                        "TK_TH",
-                        "TK THU HUONG",
-                        "Số TK",
-                        "So_TK",
-                    ]
-                    if col in row.index
-                ),
-                None,
-            )
-            bank_col = next(
-                (
-                    col
-                    for col in [
-                        "NGÂN HÀNG",
-                        "Ngan_Hang",
-                        "NGAN HANG",
-                        "NH",
-                        "Ngân hàng",
-                    ]
-                    if col in row.index
-                ),
-                None,
-            )
+        # Process each sheet
+        for current_sheet in sheets_to_process:
+            try:
+                logger.info(f"Processing sheet: {current_sheet}")
 
-            if code_col is None:
-                logger.warning("Could not find POS code column in row")
+                # Read Excel file for current sheet
+                df = pd.read_excel(file_path, sheet_name=current_sheet)
+
+                # Log DataFrame info for debugging
+                logger.info(
+                    f"Sheet '{current_sheet}' - DataFrame shape: {df.shape}"
+                )
+                logger.info(
+                    f"Sheet '{current_sheet}' - DataFrame columns: {list(df.columns)}"
+                )
+
+                # Fill NA values
+                df.fillna(
+                    {
+                        col: "" if df[col].dtype == "object" else 0
+                        for col in df.columns
+                    },
+                    inplace=True,
+                )
+
+                # Document count for this sheet
+                sheet_doc_count = 0
+                sheet_skipped_empty = 0
+
+                # Process each row in the DataFrame
+                for _, row in df.iterrows():
+                    # Try multiple possible column name variations
+                    code_col = next(
+                        (
+                            col
+                            for col in [
+                                "Mã TIP",
+                                "Ma_TIP",
+                                "MÃ TIP",
+                                "MA_TIP",
+                                "Mã POS",
+                                "Ma_POS",
+                            ]
+                            if col in row.index
+                        ),
+                        None,
+                    )
+                    dept_col = next(
+                        (
+                            col
+                            for col in [
+                                "Mã đối tượng",
+                                "Ma_Dt",
+                                "MÃ ĐỐI TƯỢNG",
+                                "MA_DT",
+                                "Mã BP",
+                                "Ma_BP",
+                            ]
+                            if col in row.index
+                        ),
+                        None,
+                    )
+                    name_col = next(
+                        (
+                            col
+                            for col in [
+                                "Tên",
+                                "Ten",
+                                "TÊN",
+                                "TEN",
+                                "Tên POS",
+                                "Ten_POS",
+                            ]
+                            if col in row.index
+                        ),
+                        None,
+                    )
+                    addr_col = next(
+                        (
+                            col
+                            for col in [
+                                "Địa chỉ",
+                                "Dia_Chi",
+                                "ĐỊA CHỈ",
+                                "DIA_CHI",
+                            ]
+                            if col in row.index
+                        ),
+                        None,
+                    )
+                    holder_col = next(
+                        (
+                            col
+                            for col in [
+                                "CHỦ TÀI KHOẢN",
+                                "Chu_TK",
+                                "CHU TAI KHOAN",
+                                "CHU_TK",
+                                "Chủ TK",
+                            ]
+                            if col in row.index
+                        ),
+                        None,
+                    )
+                    account_col = next(
+                        (
+                            col
+                            for col in [
+                                "TK THỤ HƯỞNG",
+                                "TK_TH",
+                                "TK THU HUONG",
+                                "Số TK",
+                                "So_TK",
+                            ]
+                            if col in row.index
+                        ),
+                        None,
+                    )
+                    bank_col = next(
+                        (
+                            col
+                            for col in [
+                                "NGÂN HÀNG",
+                                "Ngan_Hang",
+                                "NGAN HANG",
+                                "NH",
+                                "Ngân hàng",
+                            ]
+                            if col in row.index
+                        ),
+                        None,
+                    )
+
+                    if code_col is None:
+                        logger.warning(
+                            f"Could not find POS code column in sheet '{current_sheet}' row"
+                        )
+                        continue
+
+                    pos_code = str(row.get(code_col, "")).strip()
+
+                    if not pos_code:
+                        sheet_skipped_empty += 1
+                        continue
+
+                    doc_dict = {
+                        "code": pos_code,
+                        "department_code": str(row.get(dept_col, ""))
+                        if dept_col
+                        else "",
+                        "name": str(row.get(name_col, "")) if name_col else "",
+                        "address": str(row.get(addr_col, ""))
+                        if addr_col
+                        else "",
+                        "account_holder": str(row.get(holder_col, ""))
+                        if holder_col
+                        else "",
+                        "account_number": str(row.get(account_col, ""))
+                        if account_col
+                        else "",
+                        "bank_name": str(row.get(bank_col, ""))
+                        if bank_col
+                        else "",
+                    }
+
+                    # Add document to the index
+                    writer.add_document(Document.from_dict(doc_dict))
+                    sheet_doc_count += 1
+                    total_doc_count += 1
+
+                total_skipped_empty += sheet_skipped_empty
+                logger.info(
+                    f"Added {sheet_doc_count} POS machines from sheet '{current_sheet}' (skipped {sheet_skipped_empty} empty entries)"
+                )
+                processed_sheets += 1
+
+            except Exception as e:
+                logger.error(f"Error processing sheet '{current_sheet}': {e}")
+                failed_sheets += 1
                 continue
-
-            pos_code = str(row.get(code_col, "")).strip()
-
-            if not pos_code:
-                skipped_empty += 1
-                continue
-
-            doc_dict = {
-                "code": pos_code,
-                "department_code": str(row.get(dept_col, ""))
-                if dept_col
-                else "",
-                "name": str(row.get(name_col, "")) if name_col else "",
-                "address": str(row.get(addr_col, "")) if addr_col else "",
-                "account_holder": str(row.get(holder_col, ""))
-                if holder_col
-                else "",
-                "account_number": str(row.get(account_col, ""))
-                if account_col
-                else "",
-                "bank_name": str(row.get(bank_col, "")) if bank_col else "",
-            }
-
-            # Add document to the index
-            writer.add_document(Document.from_dict(doc_dict))
-            doc_count += 1
 
         # Commit changes to the index
         writer.commit()
         writer.wait_merging_threads()
 
         logger.info(
-            f"Added {doc_count} POS machines to the index (skipped {skipped_empty} empty entries)"
+            f"Completed processing: {total_doc_count} total POS machines from {processed_sheets} sheets (skipped {total_skipped_empty} empty entries, {failed_sheets} failed)"
         )
-        return True
+        return processed_sheets > 0
 
     except Exception as e:
         logger.error(f"Error importing POS machines: {e}")
