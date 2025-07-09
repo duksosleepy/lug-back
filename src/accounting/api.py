@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import pandas as pd
+from bs4 import BeautifulSoup
 from fastapi import APIRouter, HTTPException, UploadFile
 from loguru import logger
 from pydantic import BaseModel
@@ -38,41 +39,179 @@ class AccountingResponse(BaseModel):
     filename: Optional[str] = None
 
 
-def find_header_row(df: pd.DataFrame) -> Tuple[int, Dict[str, int]]:
+def read_excel_with_fallback(input_buffer):
+    """Read Excel file with multiple engine fallback for compatibility, including HTML format"""
+    engines = ["calamine", "openpyxl", "xlrd"]
+
+    # First try standard Excel engines
+    for engine in engines:
+        try:
+            input_buffer.seek(0)  # Reset buffer position
+            logger.info(f"Attempting to read Excel with engine: {engine}")
+            raw_df = pd.read_excel(input_buffer, header=None, engine=engine)
+            logger.info(f"Successfully read Excel file with engine: {engine}")
+            return raw_df
+        except Exception as e:
+            logger.warning(f"Engine {engine} failed: {str(e)}")
+            continue
+
+    # If all Excel engines fail, try reading as HTML (common with bank exports)
+    try:
+        input_buffer.seek(0)
+        logger.info("Attempting to read as HTML format (bank export)")
+
+        # Read as HTML - this handles Excel HTML format from banks
+        html_tables = pd.read_html(input_buffer, encoding="utf-8")
+
+        if html_tables and len(html_tables) > 0:
+            # Use the first (and usually only) table
+            raw_df = html_tables[0]
+            logger.info(
+                f"Successfully read HTML format with {len(raw_df)} rows"
+            )
+            return raw_df
+        else:
+            raise Exception("No tables found in HTML content")
+
+    except Exception as e:
+        logger.warning(f"HTML reading failed: {str(e)}")
+
+    # If HTML fails, try parsing as Excel XML format (Microsoft Excel XML)
+    try:
+        input_buffer.seek(0)
+        logger.info("Attempting to read as Excel XML format (Microsoft XML)")
+
+        # Read the content and parse with BeautifulSoup
+        content = input_buffer.read().decode("utf-8")
+        soup = BeautifulSoup(content, "xml")
+
+        # Look for Microsoft Excel Web Archive format first
+        excel_workbook = soup.find("ExcelWorkbook")
+        if excel_workbook:
+            logger.info("Detected Microsoft Excel Web Archive format")
+            worksheets = excel_workbook.find("ExcelWorksheets")
+            if worksheets:
+                worksheet_sources = worksheets.findAll("ExcelWorksheet")
+                if worksheet_sources:
+                    # This is a web archive that references external files
+                    # We can't process it without the external files
+                    raise Exception(
+                        f"Excel Web Archive format detected - requires external files. Found {len(worksheet_sources)} worksheet(s) but data is in external files like 'sheet001.htm'"
+                    )
+
+        # Look for standard Excel XML worksheets
+        worksheets = soup.findAll("Worksheet")
+        if not worksheets:
+            # Try alternative worksheet tags
+            worksheets = soup.findAll("worksheet")
+        if not worksheets:
+            # Try looking for any table-like structures
+            worksheets = soup.findAll("Table") or soup.findAll("table")
+
+        if not worksheets:
+            raise Exception("No worksheets found in XML content")
+
+        # Process the first worksheet
+        sheet = worksheets[0]
+        sheet_as_list = []
+
+        # Look for rows in different possible formats
+        rows = (
+            sheet.findAll("Row") or sheet.findAll("row") or sheet.findAll("tr")
+        )
+
+        for row in rows:
+            row_data = []
+            # Look for cells in different possible formats
+            cells = (
+                row.findAll("Cell")
+                or row.findAll("cell")
+                or row.findAll("td")
+                or row.findAll("th")
+            )
+
+            for cell in cells:
+                # Extract cell data, handling different formats
+                cell_text = ""
+                if cell.Data:
+                    cell_text = cell.Data.text if cell.Data.text else ""
+                elif cell.text:
+                    cell_text = cell.text.strip()
+                elif cell.string:
+                    cell_text = cell.string.strip()
+
+                row_data.append(cell_text)
+
+            if row_data:  # Only add non-empty rows
+                sheet_as_list.append(row_data)
+
+        if sheet_as_list:
+            raw_df = pd.DataFrame(sheet_as_list)
+            logger.info(
+                f"Successfully read Excel XML format with {len(raw_df)} rows"
+            )
+            return raw_df
+        else:
+            raise Exception("No data found in XML worksheet")
+
+    except Exception as e:
+        logger.warning(f"Excel XML reading failed: {str(e)}")
+
+    # If all methods fail, raise error
+    raise Exception(
+        "Cannot detect file format - all engines failed (tried Excel, HTML, and XML formats)"
+    )
+
+
+def find_header_row(
+    df: pd.DataFrame, bank_config=None
+) -> Tuple[int, Dict[str, int]]:
     """
     Find the header row containing the required column headers
 
     Args:
         df: DataFrame with the raw Excel data
+        bank_config: Bank-specific configuration for header patterns
 
     Returns:
         Tuple of (header_row_index, column_mapping)
     """
-    # Headers to look for (case-insensitive, without accents)
-    header_patterns = [
-        "so tham chieu",
-        "so ct",
-        "ma gd",
-        "reference",  # Reference number
-        "ngay hieu luc",
-        "ngay hl",
-        "ngay",
-        "date",  # Date
-        "ghi no",
-        "debit",
-        "tien ra",
-        "chi",  # Debit
-        "ghi co",
-        "credit",
-        "tien vao",
-        "thu",  # Credit
-        "so du",
-        "balance",  # Balance
-        "mo ta",
-        "dien giai",
-        "noi dung",
-        "description",  # Description
-    ]
+    # Get header patterns from bank configuration if provided
+    if bank_config and hasattr(bank_config, "statement_config"):
+        # Use bank-specific header patterns
+        config_patterns = bank_config.statement_config.header_patterns
+        header_patterns = []
+        for field_patterns in config_patterns.values():
+            header_patterns.extend(field_patterns)
+    else:
+        # Default patterns for backward compatibility
+        header_patterns = [
+            "so tham chieu",
+            "so ct",
+            "ma gd",
+            "reference",  # Reference number
+            "ngay hieu luc",
+            "ngay hl",
+            "ngay giao dich",  # VCB: Ngày giao dịch
+            "ngay",
+            "date",  # Date
+            "ghi no",
+            "so tien ghi no",  # VCB: Số tiền ghi nợ
+            "debit",
+            "tien ra",
+            "chi",  # Debit
+            "ghi co",
+            "so tien ghi co",  # VCB: Số tiền ghi có
+            "credit",
+            "tien vao",
+            "thu",  # Credit
+            "so du",
+            "balance",  # Balance
+            "mo ta",
+            "dien giai",
+            "noi dung",
+            "description",  # Description
+        ]
 
     # Normalize text for comparison
     def normalize(text):
@@ -166,46 +305,77 @@ def find_header_row(df: pd.DataFrame) -> Tuple[int, Dict[str, int]]:
             if any(pattern in cell_value for pattern in header_patterns):
                 header_count += 1
 
-                # Map column to standard name
-                if any(
-                    pattern in cell_value
-                    for pattern in [
-                        "so tham chieu",
-                        "so ct",
-                        "ma gd",
-                        "reference",
-                    ]
-                ):
-                    column_mapping["reference"] = col_idx
-                elif any(
-                    pattern in cell_value
-                    for pattern in ["ngay hieu luc", "ngay hl", "ngay", "date"]
-                ):
-                    column_mapping["date"] = col_idx
-                elif any(
-                    pattern in cell_value
-                    for pattern in ["ghi no", "debit", "tien ra", "chi"]
-                ):
-                    column_mapping["debit"] = col_idx
-                elif any(
-                    pattern in cell_value
-                    for pattern in ["ghi co", "credit", "tien vao", "thu"]
-                ):
-                    column_mapping["credit"] = col_idx
-                elif any(
-                    pattern in cell_value for pattern in ["so du", "balance"]
-                ):
-                    column_mapping["balance"] = col_idx
-                elif any(
-                    pattern in cell_value
-                    for pattern in [
-                        "mo ta",
-                        "dien giai",
-                        "noi dung",
-                        "description",
-                    ]
-                ):
-                    column_mapping["description"] = col_idx
+                # Map column to standard name using bank-specific patterns
+                if bank_config and hasattr(bank_config, "statement_config"):
+                    patterns = bank_config.statement_config.header_patterns
+                    # Use bank-specific mapping
+                    for field_name, field_patterns in patterns.items():
+                        if any(
+                            normalize(pattern) in cell_value
+                            for pattern in field_patterns
+                        ):
+                            column_mapping[field_name] = col_idx
+                            break
+                else:
+                    # Default mapping for backward compatibility
+                    if any(
+                        pattern in cell_value
+                        for pattern in [
+                            "so tham chieu",
+                            "so ct",
+                            "ma gd",
+                            "reference",
+                        ]
+                    ):
+                        column_mapping["reference"] = col_idx
+                    elif any(
+                        pattern in cell_value
+                        for pattern in [
+                            "ngay hieu luc",
+                            "ngay hl",
+                            "ngay giao dich",
+                            "ngay",
+                            "date",
+                        ]
+                    ):
+                        column_mapping["date"] = col_idx
+                    elif any(
+                        pattern in cell_value
+                        for pattern in [
+                            "ghi no",
+                            "so tien ghi no",
+                            "debit",
+                            "tien ra",
+                            "chi",
+                        ]
+                    ):
+                        column_mapping["debit"] = col_idx
+                    elif any(
+                        pattern in cell_value
+                        for pattern in [
+                            "ghi co",
+                            "so tien ghi co",
+                            "credit",
+                            "tien vao",
+                            "thu",
+                        ]
+                    ):
+                        column_mapping["credit"] = col_idx
+                    elif any(
+                        pattern in cell_value
+                        for pattern in ["so du", "balance"]
+                    ):
+                        column_mapping["balance"] = col_idx
+                    elif any(
+                        pattern in cell_value
+                        for pattern in [
+                            "mo ta",
+                            "dien giai",
+                            "noi dung",
+                            "description",
+                        ]
+                    ):
+                        column_mapping["description"] = col_idx
 
         # If we found at least 3 headers, consider this the header row
         if header_count >= 3:
@@ -220,7 +390,10 @@ def find_header_row(df: pd.DataFrame) -> Tuple[int, Dict[str, int]]:
 
 
 def extract_transactions(
-    df: pd.DataFrame, header_row: int, column_mapping: Dict[str, int]
+    df: pd.DataFrame,
+    header_row: int,
+    column_mapping: Dict[str, int],
+    bank_config=None,
 ) -> pd.DataFrame:
     """
     Extract transactions from the DataFrame starting from the row after the header
@@ -229,6 +402,7 @@ def extract_transactions(
         df: DataFrame with the raw data
         header_row: Index of the header row
         column_mapping: Mapping of standard column names to column indices
+        bank_config: Bank-specific configuration for processing rules
 
     Returns:
         DataFrame with the transactions
@@ -239,23 +413,50 @@ def extract_transactions(
     # Start from the row after the header
     start_row = header_row + 1
 
+    # Determine if this is VCB bank requiring null reference check
+    is_vcb_bank = (
+        bank_config
+        and hasattr(bank_config, "code")
+        and bank_config.code.upper() == "VCB"
+    )
+
     # Process each row until we find a termination indicator or end of data
     for row_idx in range(start_row, len(df)):
         row = df.iloc[row_idx]
+
+        # VCB-specific: Stop reading when reference number is null
+        if is_vcb_bank and "reference" in column_mapping:
+            ref_col_idx = column_mapping["reference"]
+            if ref_col_idx < len(row):
+                ref_value = row[ref_col_idx]
+                if (
+                    pd.isna(ref_value)
+                    or ref_value == ""
+                    or str(ref_value).strip() == ""
+                ):
+                    logger.info(
+                        f"VCB: Found null reference at row {row_idx}, stopping extraction"
+                    )
+                    break
 
         # Check if this is a termination row (e.g., totals row)
         row_text = " ".join(
             [str(val).lower() for val in row.values if pd.notna(val)]
         )
-        if any(
-            term in row_text
-            for term in [
-                "tong cong",
-                "total",
-                "so du cuoi ky",
-                "cong phat sinh",
-            ]
-        ):
+
+        # Use bank-specific termination patterns if available
+        termination_patterns = [
+            "tong cong",
+            "total",
+            "so du cuoi ky",
+            "cong phat sinh",
+        ]
+        if bank_config and hasattr(bank_config, "statement_config"):
+            termination_patterns = (
+                bank_config.statement_config.data_end_patterns
+            )
+
+        if any(term.lower() in row_text for term in termination_patterns):
             logger.info(f"Found termination row at index {row_idx}: {row_text}")
             break
 
@@ -405,14 +606,23 @@ async def process_bank_statement(file: UploadFile):
                 # Step 1: Read the raw Excel file - KEEP ORIGINAL EXTRACTION LOGIC
                 logger.info(f"Reading Excel file: {file.filename}")
 
-                # Read raw Excel data without headers
-                input_buffer.seek(0)
-                raw_df = pd.read_excel(
-                    input_buffer, header=None, engine="calamine"
-                )
+                # Read raw Excel data without headers with engine fallback
+                raw_df = read_excel_with_fallback(input_buffer)
 
-                # Find the header row and column mapping
-                header_row, column_mapping = find_header_row(raw_df)
+                # Get bank configuration for processing
+                bank_config = None
+                if processor.current_bank_name:
+                    bank_config = processor.get_bank_config_for_bank(
+                        processor.current_bank_name
+                    )
+                    logger.info(
+                        f"Using bank config for: {processor.current_bank_name}"
+                    )
+
+                # Find the header row and column mapping with bank-specific patterns
+                header_row, column_mapping = find_header_row(
+                    raw_df, bank_config
+                )
 
                 if header_row == -1 or not column_mapping:
                     logger.error(
@@ -423,9 +633,9 @@ async def process_bank_statement(file: UploadFile):
                         detail="Could not find header row with required columns",
                     )
 
-                # Extract transactions (only rows with reference numbers)
+                # Extract transactions with bank-specific rules
                 transactions_df = extract_transactions(
-                    raw_df, header_row, column_mapping
+                    raw_df, header_row, column_mapping, bank_config
                 )
 
                 logger.info(
