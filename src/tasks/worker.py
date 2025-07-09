@@ -24,6 +24,7 @@ celery_app = Celery(
     app_settings.app_name,
     broker=f"{REDIS_URL}/0",
     backend=f"{REDIS_URL}/1",
+    include=["src.tasks.worker"],
 )
 
 # Cấu hình Celery
@@ -31,12 +32,12 @@ celery_app.conf.update(
     # Cấu hình cho các task định kỳ
     beat_schedule={
         "sync-pending-registrations": {
-            "task": "tasks.worker.sync_pending_registrations",
+            "task": "src.tasks.worker.sync_pending_registrations",
             "schedule": 3600.0,  # Chạy mỗi giờ (3600s)
             "args": (),
         },
         "daily-sapo-sync": {
-            "task": "tasks.worker.daily_sapo_sync",
+            "task": "src.tasks.worker.daily_sapo_sync",
             "schedule": crontab(hour=0, minute=30),
             "args": (),
         },
@@ -49,6 +50,9 @@ celery_app.conf.update(
     worker_concurrency=4,
     task_time_limit=1800,  # 30 minutes
     task_soft_time_limit=1500,  # 25 minutes
+    task_routes={
+        "src.tasks.worker.*": {"queue": "celery"},
+    },
 )
 
 
@@ -283,7 +287,7 @@ def run_async_sync(start_date: str, end_date: str) -> dict:
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
-def daily_sapo_sync(self):  # ✅ FIXED: Removed async keyword
+def daily_sapo_sync(self):
     """
     Task chạy hàng ngày vào 00:30 AM để đồng bộ dữ liệu từ Sapo APIs.
     Đồng bộ từ ngày 31/12 của năm trước đến ngày hiện tại.
@@ -300,7 +304,6 @@ def daily_sapo_sync(self):  # ✅ FIXED: Removed async keyword
             f"Bắt đầu đồng bộ Sapo hàng ngày từ {start_date} đến {end_date}"
         )
 
-        # ✅ FIXED: Use helper function to run async operations
         mysapo_result, mysapogo_result = run_async_sync(start_date, end_date)
 
         total_orders_processed = mysapo_result.get(
