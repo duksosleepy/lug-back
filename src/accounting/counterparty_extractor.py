@@ -987,12 +987,13 @@ class CounterpartyExtractor:
         self, extracted_pos_machines: List[Dict]
     ) -> Dict[str, any]:
         """
-        Implement NEW POS machine counterparty logic:
+        Implement NEW POS machine counterparty logic with bonus condition:
         1. Get POS machine code and search in pos_machines index
         2. Get "department_code" from POS machine record
         3. Clean department_code (split by "-" or "_", take last element, remove spaces)
         4. Search counterparties by cleaned code using "code" field
-        5. Return counterparty code, name, address
+        5. BONUS CONDITION: Filter results where name = "KHÁCH LẺ KHÔNG LẤY HOÁ ĐƠN"
+        6. Return counterparty code, name, address
 
         Args:
             extracted_pos_machines: List of POS machines from search_entities
@@ -1044,8 +1045,6 @@ class CounterpartyExtractor:
         )
 
         # Step 3: Search counterparties by cleaned department code
-
-        # Search for counterparty with the cleaned department code
         counterparty_matches = search_exact_counterparties(
             cleaned_dept_code, field_name="code", limit=5
         )
@@ -1060,9 +1059,33 @@ class CounterpartyExtractor:
             f"Found {len(counterparty_matches)} counterparties with code '{cleaned_dept_code}'"
         )
 
-        # Step 4: Return the best counterparty match
-        best_counterparty = counterparty_matches[0]  # Highest score
+        # Step 4: Apply BONUS CONDITION - Filter by name = "KHÁCH LẺ KHÔNG LẤY HOÁ ĐƠN"
+        bonus_condition_name = "KHÁCH LẺ KHÔNG LẤY HOÁ ĐƠN"
+        filtered_matches = []
+        
+        for match in counterparty_matches:
+            match_name = match.get("name", "").strip()
+            if match_name == bonus_condition_name:
+                filtered_matches.append(match)
+                self.logger.info(
+                    f"POS BONUS CONDITION: Found counterparty with code '{match['code']}' and name '{match_name}'"
+                )
+        
+        # Step 5: Use filtered results if available, otherwise fallback to original results
+        if filtered_matches:
+            self.logger.info(
+                f"POS BONUS CONDITION: Using {len(filtered_matches)} filtered matches (name = '{bonus_condition_name}')"
+            )
+            best_counterparty = filtered_matches[0]  # Use first filtered match
+            condition_applied = "pos_machine_counterparty_logic_with_bonus_condition"
+        else:
+            self.logger.info(
+                f"POS BONUS CONDITION: No matches found with name '{bonus_condition_name}', using original results"
+            )
+            best_counterparty = counterparty_matches[0]  # Use original best match
+            condition_applied = "pos_machine_counterparty_logic_original"
 
+        # Step 6: Return the best counterparty match
         result = {
             "code": best_counterparty["code"],
             "name": self.clean_counterparty_name(best_counterparty["name"]),
@@ -1070,15 +1093,18 @@ class CounterpartyExtractor:
             "phone": best_counterparty.get("phone") or "",
             "tax_id": best_counterparty.get("tax_id") or "",
             "source": "pos_machine_lookup",
-            "condition_applied": "pos_machine_counterparty_logic_new",
+            "condition_applied": condition_applied,
             "pos_code": pos_code,
             "pos_department_code": pos_department_code,
             "cleaned_department_code": cleaned_dept_code,
+            "bonus_condition_applied": len(filtered_matches) > 0,
+            "bonus_condition_name": bonus_condition_name,
         }
 
         self.logger.info(
             f"NEW POS machine logic result: Found counterparty '{result['name']}' (code: {result['code']}) "
-            f"for POS {pos_code} using cleaned department code '{cleaned_dept_code}'"
+            f"for POS {pos_code} using cleaned department code '{cleaned_dept_code}' "
+            f"(bonus condition applied: {result['bonus_condition_applied']})"
         )
 
         return result

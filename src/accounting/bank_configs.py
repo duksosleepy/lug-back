@@ -165,10 +165,124 @@ BIDV_CONFIG = BankConfig(
     ),
 )
 
+# ACB Configuration - based on _banks.json structure
+ACB_CONFIG = BankConfig(
+    name="NGÂN HÀNG THƯƠNG MẠI CỔ PHẦN Á CHÂU",
+    short_name="ACB",
+    code="ACB",
+    statement_config=BankStatementConfig(
+        bank_name="ACB",
+        header_patterns={
+            "reference": ["số gd", "so gd"],  # Very specific to ACB
+            "date": [
+                "ngày giao dịch",
+                "ngay giao dich",
+            ],
+            "debit": [
+                "số tiền rút ra",
+                "so tien rut ra",
+            ],
+            "credit": [
+                "số tiền gửi vào",
+                "so tien gui vao",
+            ],
+            "balance": ["số dư", "so du"],  # Only exact match, not partial
+            "description": [
+                "nội dung giao dịch",
+                "noi dung giao dich",
+            ],
+        },
+        data_start_patterns=[
+            "ngày giao dịch",
+            "ngay giao dich",
+            "số gd",
+            "so gd",
+        ],
+        data_end_patterns=[
+            "tổng số",
+            "tong so",
+            "tổng cộng",
+            "tong cong",
+            "total",
+            "số dư cuối kỳ",
+            "so du cuoi ky",
+        ],
+        required_columns=["date", "reference", "description"],
+    ),
+)
+
+# MBB Configuration - based on MBB statement format
+MBB_CONFIG = BankConfig(
+    name="NGÂN HÀNG THƯƠNG MẠI CỔ PHẦN QUÂN ĐỘI",
+    short_name="MBB",
+    code="MBB",
+    statement_config=BankStatementConfig(
+        bank_name="MBB",
+        header_patterns={
+            "reference": [
+                "bút toán",
+                "but toan",
+                "BÚT TOÁN",
+                "BUT TOAN",
+            ],
+            "date": [
+                "ngày giao dịch",
+                "ngay giao dich",
+                "NGÀY GIAO DỊCH",
+                "NGAY GIAO DICH",
+            ],
+            "debit": [
+                "phát sinh nợ",
+                "phat sinh no",
+                "PHÁT SINH NỢ",
+                "PHAT SINH NO",
+            ],
+            "credit": [
+                "phát sinh có",
+                "phat sinh co",
+                "PHÁT SINH CÓ",
+                "PHAT SINH CO",
+            ],
+            "balance": [
+                "số dư",
+                "so du",
+                "SỐ DƯ",
+                "SO DU",
+            ],
+            "description": [
+                "nội dung",
+                "noi dung",
+                "NỘI DUNG",
+                "NOI DUNG",
+            ],
+        },
+        data_start_patterns=[
+            "bút toán",
+            "but toan",
+            "BÚT TOÁN",
+            "ngày giao dịch",
+            "ngay giao dich",
+            "NGÀY GIAO DỊCH",
+        ],
+        data_end_patterns=[
+            "tổng cộng",
+            "tong cong",
+            "total",
+            "số dư cuối kỳ",
+            "so du cuoi ky",
+            "phát sinh trong kỳ",
+            "phat sinh trong ky",
+        ],
+        required_columns=["date", "reference", "description"],
+    ),
+)
+
 # Bank configurations registry - using short_name as key to match _banks.json
 BANK_CONFIGS = {
     "VCB": VCB_CONFIG,
     "BIDV": BIDV_CONFIG,
+    "ACB": ACB_CONFIG,
+    "MBB": MBB_CONFIG,
 }
 
 

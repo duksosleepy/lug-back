@@ -30,6 +30,58 @@ reader = BankStatementReader()
 processor = IntegratedBankProcessor()
 
 
+def create_basic_saoke_entry(transaction, bank_config=None):
+    """Create a basic SaokeEntry when process_transaction method is not available"""
+    try:
+        from src.accounting.integrated_bank_processor import SaokeEntry
+
+        # Determine if this is a credit or debit transaction
+        is_credit = transaction.credit_amount > 0
+        amount = (
+            transaction.credit_amount if is_credit else transaction.debit_amount
+        )
+
+        # Basic document type
+        document_type = "BC" if is_credit else "BN"
+
+        # Format date
+        date_str = transaction.datetime.strftime("%d/%m/%Y")
+
+        # Generate simple document number
+        doc_number = f"{document_type}01/{transaction.reference[-3:] if transaction.reference else '001'}"
+
+        # Create basic entry
+        entry = SaokeEntry(
+            document_type=document_type,
+            date=date_str,
+            document_number=doc_number,
+            currency="VND",
+            exchange_rate=1.0,
+            counterparty_code="KL-001",  # Default counterparty
+            counterparty_name="Khách hàng",
+            address="",
+            description=transaction.description[:100],  # Truncate if too long
+            original_description=transaction.description,
+            amount1=amount,
+            amount2=amount,
+            debit_account="1121114"
+            if is_credit
+            else "131",  # Bank account for credit, default for debit
+            credit_account="131"
+            if is_credit
+            else "1121114",  # Default for credit, bank account for debit
+        )
+
+        logger.info(
+            f"Created basic saoke entry: amount={amount}, type={document_type}, ref={transaction.reference}"
+        )
+        return entry
+
+    except Exception as e:
+        logger.error(f"Error creating basic saoke entry: {e}")
+        return None
+
+
 class AccountingResponse(BaseModel):
     """Response model for accounting endpoints"""
 
@@ -176,15 +228,25 @@ def find_header_row(
     Returns:
         Tuple of (header_row_index, column_mapping)
     """
+    # Debug logging for MBB
+    bank_code = "UNKNOWN"
+    if bank_config and hasattr(bank_config, "code"):
+        bank_code = bank_config.code
+        logger.info(
+            f"Processing {bank_code} file with bank-specific configuration"
+        )
+
     # Get header patterns from bank configuration if provided
     if bank_config and hasattr(bank_config, "statement_config"):
         # Use bank-specific header patterns
         config_patterns = bank_config.statement_config.header_patterns
+        logger.info(f"{bank_code} header patterns: {config_patterns}")
         header_patterns = []
         for field_patterns in config_patterns.values():
             header_patterns.extend(field_patterns)
     else:
         # Default patterns for backward compatibility
+        logger.info("Using default header patterns")
         header_patterns = [
             "so tham chieu",
             "so ct",
@@ -217,9 +279,9 @@ def find_header_row(
     def normalize(text):
         if pd.isna(text) or not isinstance(text, str):
             return ""
-        # Convert to lowercase and remove diacritics
+        # Convert to lowercase but preserve spaces
         text = text.lower().strip()
-        # Replace common Vietnamese diacritics
+        # Replace common Vietnamese diacritics but keep spaces
         replacements = {
             "á": "a",
             "à": "a",
@@ -297,24 +359,52 @@ def find_header_row(
     for row_idx in range(min(20, len(df))):  # Look at first 20 rows
         row_values = [normalize(val) for val in df.iloc[row_idx].values]
 
+        # Debug: Show raw row values for the first few rows
+        if row_idx <= 10:
+            logger.debug(
+                f"Row {row_idx}: {[str(val) for val in df.iloc[row_idx].values]}"
+            )
+            logger.debug(f"Normalized Row {row_idx}: {row_values}")
+
         # Count how many headers we found in this row
         header_count = 0
         column_mapping = {}
 
         for col_idx, cell_value in enumerate(row_values):
-            if any(pattern in cell_value for pattern in header_patterns):
+            # Skip empty values
+            if not cell_value:
+                continue
+
+            # Check if this cell contains any header pattern
+            matched_patterns = [
+                pattern for pattern in header_patterns if pattern in cell_value
+            ]
+            if matched_patterns:
+                logger.debug(
+                    f"Row {row_idx}, Col {col_idx}: '{cell_value}' matched patterns: {matched_patterns}"
+                )
                 header_count += 1
 
                 # Map column to standard name using bank-specific patterns
                 if bank_config and hasattr(bank_config, "statement_config"):
                     patterns = bank_config.statement_config.header_patterns
-                    # Use bank-specific mapping
+                    # Use bank-specific mapping - check each field
                     for field_name, field_patterns in patterns.items():
+                        # Normalize the configured patterns for comparison
+                        normalized_patterns = [
+                            normalize(pattern) for pattern in field_patterns
+                        ]
                         if any(
-                            normalize(pattern) in cell_value
-                            for pattern in field_patterns
+                            normalized_pattern in cell_value
+                            for normalized_pattern in normalized_patterns
                         ):
-                            column_mapping[field_name] = col_idx
+                            if (
+                                field_name not in column_mapping
+                            ):  # Avoid overwriting if already found
+                                column_mapping[field_name] = col_idx
+                                logger.info(
+                                    f"{bank_code}: Mapped '{field_name}' to column {col_idx} ('{df.iloc[row_idx].values[col_idx]}')"
+                                )
                             break
                 else:
                     # Default mapping for backward compatibility
@@ -377,13 +467,60 @@ def find_header_row(
                     ):
                         column_mapping["description"] = col_idx
 
-        # If we found at least 3 headers, consider this the header row
-        if header_count >= 3:
-            logger.info(
-                f"Found header row at index {row_idx} with {header_count} headers"
-            )
-            logger.info(f"Column mapping: {column_mapping}")
-            return row_idx, column_mapping
+        # If we found at least 4 headers and have all critical fields, consider this the header row
+        # For ACB, we need "Số GD" (reference), "Ngày giao dịch" (date), and "Nội dung giao dịch" (description)
+        critical_fields_found = 0
+        required_critical_fields = ["reference", "date", "description"]
+
+        for critical_field in required_critical_fields:
+            if critical_field in column_mapping:
+                critical_fields_found += 1
+
+        # Log analysis for this row
+        logger.debug(
+            f"Row {row_idx}: Found {header_count} headers, {critical_fields_found} critical fields"
+        )
+        logger.debug(f"Row {row_idx}: Column mapping so far: {column_mapping}")
+
+        # Require at least 4 total headers AND all 3 critical fields for ACB and MBB
+        min_headers_needed = 4
+        min_critical_needed = 3
+
+        # For bank-specific requirements
+        if (
+            bank_config
+            and hasattr(bank_config, "code")
+            and bank_config.code in ["ACB", "MBB"]
+        ):
+            # ACB and MBB require all critical fields to avoid matching summary rows
+            if (
+                header_count >= min_headers_needed
+                and critical_fields_found >= min_critical_needed
+            ):
+                logger.info(
+                    f"Found valid {bank_config.code} header row at index {row_idx} with {header_count} headers and {critical_fields_found} critical fields"
+                )
+                logger.info(
+                    f"{bank_config.code} Column mapping: {column_mapping}"
+                )
+
+                # For MBB, verify that 'reference' points to 'BÚT TOÁN' column
+                if bank_config.code == "MBB" and "reference" in column_mapping:
+                    ref_col_idx = column_mapping["reference"]
+                    ref_header = df.iloc[row_idx].values[ref_col_idx]
+                    logger.info(
+                        f"MBB: Reference field mapped to column {ref_col_idx} with header '{ref_header}'"
+                    )
+
+                return row_idx, column_mapping
+        else:
+            # For other banks, use the original logic
+            if header_count >= 3:
+                logger.info(
+                    f"Found header row at index {row_idx} with {header_count} headers"
+                )
+                logger.info(f"Column mapping: {column_mapping}")
+                return row_idx, column_mapping
 
     # If no header row found, return -1 and empty mapping
     return -1, {}
@@ -413,11 +550,23 @@ def extract_transactions(
     # Start from the row after the header
     start_row = header_row + 1
 
-    # Determine if this is VCB bank requiring null reference check
+    # Determine if this is VCB, ACB, or MBB bank requiring null reference check
     is_vcb_bank = (
         bank_config
         and hasattr(bank_config, "code")
         and bank_config.code.upper() == "VCB"
+    )
+
+    is_acb_bank = (
+        bank_config
+        and hasattr(bank_config, "code")
+        and bank_config.code.upper() == "ACB"
+    )
+
+    is_mbb_bank = (
+        bank_config
+        and hasattr(bank_config, "code")
+        and bank_config.code.upper() == "MBB"
     )
 
     # Process each row until we find a termination indicator or end of data
@@ -436,6 +585,39 @@ def extract_transactions(
                 ):
                     logger.info(
                         f"VCB: Found null reference at row {row_idx}, stopping extraction"
+                    )
+                    break
+
+        # ACB-specific: Stop reading when 'Số GD' (reference number) is null
+        if is_acb_bank and "reference" in column_mapping:
+            ref_col_idx = column_mapping["reference"]
+            if ref_col_idx < len(row):
+                ref_value = row[ref_col_idx]
+                if (
+                    pd.isna(ref_value)
+                    or ref_value == ""
+                    or str(ref_value).strip() == ""
+                ):
+                    logger.info(
+                        f"ACB: Found null 'Số GD' at row {row_idx}, stopping extraction"
+                    )
+                    break
+
+        # MBB-specific: Stop reading when 'BÚT TOÁN' (reference number) is null
+        if is_mbb_bank and "reference" in column_mapping:
+            ref_col_idx = column_mapping["reference"]
+            if ref_col_idx < len(row):
+                ref_value = row[ref_col_idx]
+                logger.debug(
+                    f"MBB Row {row_idx}: BÚT TOÁN column {ref_col_idx} value: '{ref_value}'"
+                )
+                if (
+                    pd.isna(ref_value)
+                    or ref_value == ""
+                    or str(ref_value).strip() == ""
+                ):
+                    logger.info(
+                        f"MBB: Found null 'BÚT TOÁN' at row {row_idx}, stopping extraction"
                     )
                     break
 
@@ -468,6 +650,14 @@ def extract_transactions(
             if col_idx < len(row):
                 value = row[col_idx]
 
+                # Debug logging for MBB to show what's being extracted
+                if (
+                    is_mbb_bank and row_idx <= start_row + 3
+                ):  # Show first few data rows
+                    logger.debug(
+                        f"MBB Row {row_idx}: Extracting {col_name} from column {col_idx}, value: '{value}'"
+                    )
+
                 # Handle different column types
                 if col_name == "date":
                     # Try to parse as date
@@ -488,15 +678,38 @@ def extract_transactions(
                                 value = value.replace(",", "").replace(" ", "")
                             value = pd.to_numeric(value)
                         except Exception as e:
-                            logger.warning(
-                                f"Failed to parse numeric value {value}: {e}"
+                            logger.error(
+                                f"Row {row_idx}, Column {col_idx} ({col_name}): Failed to parse numeric value '{value}': {e}"
                             )
+                            # Skip this row if we can't parse critical numeric data
+                            continue
+                elif col_name in ["reference", "description"]:
+                    # Keep as string
+                    if pd.notna(value):
+                        value = str(value).strip()
+                    else:
+                        value = ""
 
                 record[col_name] = value
 
-        # Include ALL rows from the data area, not just those with references
-        # This ensures we capture all transactions in the statement
-        data_rows.append(record)
+        # For MBB: Only include rows that have a valid 'BÚT TOÁN' (reference) value
+        if is_mbb_bank:
+            if (
+                "reference" in record
+                and record["reference"]
+                and str(record["reference"]).strip()
+            ):
+                data_rows.append(record)
+                logger.debug(
+                    f"MBB: Added row {row_idx} with BÚT TOÁN: '{record['reference']}'"
+                )
+            else:
+                logger.debug(
+                    f"MBB: Skipped row {row_idx} - no valid BÚT TOÁN value"
+                )
+        else:
+            # Include ALL rows from the data area for other banks
+            data_rows.append(record)
 
     # Create DataFrame from records
     transactions_df = pd.DataFrame(data_rows)
@@ -568,15 +781,37 @@ async def process_bank_statement(file: UploadFile):
                         file.filename
                     )
                     if bank_name:
+                        logger.info(
+                            f"Extracted bank name: '{bank_name}' from filename"
+                        )
                         bank_info = processor.get_bank_info_by_name(bank_name)
+
+                        # DEBUG: Check what get_bank_info_by_name returned
+                        logger.info(
+                            f"Bank info result: {type(bank_info)} - {bank_info}"
+                        )
+
                         if bank_info:
-                            processor.current_bank_name = bank_info.get(
-                                "short_name", ""
-                            )
-                            processor.current_bank_info = bank_info
-                            logger.info(
-                                f"Identified bank {processor.current_bank_name} from filename"
-                            )
+                            # Ensure bank_info is a dictionary before accessing
+                            if isinstance(bank_info, dict):
+                                processor.current_bank_name = bank_info.get(
+                                    "short_name", ""
+                                )
+                                processor.current_bank_info = bank_info
+                                logger.info(
+                                    f"Identified bank {processor.current_bank_name} from filename"
+                                )
+                            else:
+                                logger.error(
+                                    f"Bank info is not a dictionary: {type(bank_info)} - {bank_info}"
+                                )
+                                # Set default values to prevent further errors
+                                processor.current_bank_name = bank_name
+                                processor.current_bank_info = {
+                                    "code": bank_name,
+                                    "short_name": bank_name,
+                                    "name": f"Bank {bank_name}",
+                                }
                         else:
                             logger.warning(
                                 f"Could not find bank info for '{bank_name}' from filename"
@@ -638,9 +873,21 @@ async def process_bank_statement(file: UploadFile):
                     raw_df, header_row, column_mapping, bank_config
                 )
 
-                logger.info(
-                    f"Extracted {len(transactions_df)} transactions from raw data"
-                )
+                # Debug logging for MBB to show what data was extracted
+                if bank_config and bank_config.code == "MBB":
+                    logger.info(
+                        f"MBB: Extracted {len(transactions_df)} transactions from Excel file"
+                    )
+                    logger.info(
+                        f"MBB: Transactions DataFrame columns: {list(transactions_df.columns)}"
+                    )
+                    if len(transactions_df) > 0:
+                        for i, (_, row) in enumerate(
+                            transactions_df.head(3).iterrows()
+                        ):
+                            logger.info(
+                                f"MBB Row {i + 1}: debit={row.get('debit', 'N/A')}, credit={row.get('credit', 'N/A')}, ref={row.get('reference', 'N/A')}, desc={str(row.get('description', 'N/A'))[:50]}..."
+                            )
 
                 # Step 2: Extract bank account from header using IntegratedBankProcessor
                 input_buffer.seek(0)
@@ -700,6 +947,17 @@ async def process_bank_statement(file: UploadFile):
                             RawTransaction,
                         )
 
+                        if bank_config and bank_config.code == "MBB":
+                            logger.info(
+                                f"MBB: transactions_df columns: {list(transactions_df.columns)}"
+                            )
+                            logger.info("MBB: Sample row data:")
+                            if len(transactions_df) > 0:
+                                sample_row = transactions_df.iloc[0]
+                                for col, val in sample_row.items():
+                                    logger.info(
+                                        f"  {col}: '{val}' (type: {type(val)})"
+                                    )
                         transaction = RawTransaction(
                             reference=str(row.get("reference", "")),
                             datetime=row["date"]
@@ -713,6 +971,12 @@ async def process_bank_statement(file: UploadFile):
                             description=str(row.get("description", "")),
                         )
                         raw_transactions.append(transaction)
+
+                        # Debug logging for MBB transactions
+                        if bank_config and bank_config.code == "MBB":
+                            logger.info(
+                                f"MBB Raw Transaction: ref={transaction.reference}, debit={transaction.debit_amount}, credit={transaction.credit_amount}, desc={transaction.description[:50]}..."
+                            )
                     except Exception as e:
                         logger.error(
                             f"Error converting row to RawTransaction: {e}"
@@ -725,10 +989,43 @@ async def process_bank_statement(file: UploadFile):
 
                 for i, transaction in enumerate(raw_transactions):
                     try:
-                        entry = processor.process_transaction(transaction)
+                        # Debug logging for MBB transactions
+                        if bank_config and bank_config.code == "MBB":
+                            logger.info(
+                                f"MBB: Processing transaction {i + 1}: ref={transaction.reference}, debit={transaction.debit_amount}, credit={transaction.credit_amount}"
+                            )
+
+                        # Check if processor has process_transaction method
+                        if hasattr(processor, "process_transaction"):
+                            entry = processor.process_transaction(transaction)
+                        else:
+                            # Create a basic SaokeEntry if process_transaction doesn't exist
+                            logger.warning(
+                                "process_transaction method not found, creating basic entry"
+                            )
+                            entry = create_basic_saoke_entry(
+                                transaction, bank_config
+                            )
+
                         if entry:
-                            saoke_entries.append(entry.as_dict())
+                            entry_dict = (
+                                entry.as_dict()
+                                if hasattr(entry, "as_dict")
+                                else entry.__dict__
+                            )
+                            saoke_entries.append(entry_dict)
                             processed_count += 1
+
+                            # Debug logging for MBB
+                            if bank_config and bank_config.code == "MBB":
+                                amount = (
+                                    entry_dict.get("amount1", 0)
+                                    if isinstance(entry_dict, dict)
+                                    else getattr(entry, "amount1", 0)
+                                )
+                                logger.info(
+                                    f"MBB: Successfully processed transaction {i + 1}, amount1={amount}"
+                                )
                         else:
                             failed_count += 1
                             logger.warning(

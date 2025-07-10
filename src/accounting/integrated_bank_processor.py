@@ -167,7 +167,7 @@ class IntegratedBankProcessor:
         self._current_transaction_is_interest_payment = False
 
         # Load bank information from banks.json
-        self.banks_data = {}
+        self.banks_data = []
         self._load_bank_info()
 
         # Document number counters
@@ -257,112 +257,83 @@ class IntegratedBankProcessor:
     def _load_bank_info(self):
         """Load bank information from _banks.json"""
         try:
-            banks_file = Path(__file__).parent / "_banks.json"
-            if banks_file.exists():
-                with open(banks_file, "r", encoding="utf-8") as f:
+            banks_json_path = Path(__file__).parent / "_banks.json"
+            if banks_json_path.exists():
+                with open(banks_json_path, "r", encoding="utf-8") as f:
                     self.banks_data = json.load(f)
                 self.logger.info(
                     f"Loaded {len(self.banks_data)} banks from _banks.json"
                 )
             else:
                 self.logger.warning(
-                    "_banks.json not found, using empty banks data"
+                    f"_banks.json not found at {banks_json_path}"
                 )
                 self.banks_data = []
         except Exception as e:
-            self.logger.error(f"Error loading bank information: {e}")
+            self.logger.error(f"Error loading bank info: {e}")
             self.banks_data = []
 
-    def extract_bank_from_filename(self, filename: str) -> str:
-        """Extract bank name from filename (e.g., 'VCB' from 'VCB T06 2025t.xlsx')"""
+    def extract_bank_from_filename(self, filename: str) -> Optional[str]:
+        """Extract bank name from filename"""
         if not filename:
-            return ""
-
-        filename_parts = Path(filename).stem.split()
-        if not filename_parts:
-            return ""
-
-        potential_bank_name = filename_parts[0].upper()
-        self.logger.info(
-            f"Attempting to extract bank from filename: '{filename}', potential name: '{potential_bank_name}'"
-        )
-
-        for bank in self.banks_data:
-            if bank.get("short_name", "").upper() == potential_bank_name:
-                self.logger.info(
-                    f"Successfully identified bank: {bank.get('short_name', potential_bank_name)}"
-                )
-                return potential_bank_name
-
-        for bank in self.banks_data:
-            bank_short_name = bank.get("short_name", "").upper()
-            if bank_short_name and potential_bank_name.startswith(
-                bank_short_name
-            ):
-                self.logger.info(
-                    f"Partial match found for bank: {bank.get('short_name', bank_short_name)}"
-                )
-                return bank_short_name
-
-        self.logger.warning(
-            f"No bank found for filename pattern: {potential_bank_name}"
-        )
-        return ""
-
-    def get_bank_info_by_name(self, bank_name: str) -> Optional[Dict]:
-        """Get bank information by bank name/code
-
-        Args:
-            bank_name: Bank name or code to search for
-
-        Returns:
-            Bank information dictionary if found, None otherwise
-        """
-        if not bank_name or not self.banks_data:
             return None
 
-        bank_name_upper = bank_name.upper()
+        filename_upper = filename.upper()
 
-        # First try exact code match
-        for bank in self.banks_data:
-            if bank.get("code", "").upper() == bank_name_upper:
-                self.logger.info(
-                    f"Found bank by code: {bank.get('shortName', bank_name)}"
-                )
-                return bank
+        # Common bank name patterns in filenames
+        bank_patterns = [
+            "BIDV",
+            "VCB",
+            "VIETCOMBANK",
+            "ACB",
+            "TECHCOMBANK",
+            "TPB",
+            "TPBANK",
+            "SACOMBANK",
+            "SCB",
+            "MBB",
+            "MBBANK",
+            "VIB",
+            "SHB",
+            "EXIMBANK",
+            "HDBANK",
+            "OCB",
+            "VPBANK",
+            "AGRIBANK",
+            "VIETINBANK",
+        ]
 
-        # Then try short name match
-        for bank in self.banks_data:
-            if bank.get("shortName", "").upper() == bank_name_upper:
-                self.logger.info(
-                    f"Found bank by shortName: {bank.get('shortName', bank_name)}"
-                )
-                return bank
+        for pattern in bank_patterns:
+            if pattern in filename_upper:
+                # Map some common variations to standard names
+                if pattern in ["VIETCOMBANK"]:
+                    return "VCB"
+                elif pattern in ["TECHCOMBANK"]:
+                    return "TCB"
+                elif pattern in ["TPBANK"]:
+                    return "TPB"
+                elif pattern in ["MBBANK"]:
+                    return "MBB"
+                elif pattern in ["EXIMBANK"]:
+                    return "EIB"
+                elif pattern in ["VIETINBANK"]:
+                    return "ICB"
+                else:
+                    return pattern
 
-        # Finally try name contains
-        for bank in self.banks_data:
-            if bank_name_upper in bank.get("name", "").upper():
-                self.logger.info(
-                    f"Found bank by name pattern: {bank.get('shortName', bank_name)}"
-                )
-                return bank
-
-        self.logger.warning(f"Bank not found: {bank_name}")
         return None
 
-    def get_bank_config_for_bank(self, bank_code: str):
-        """Get bank-specific configuration for processing"""
+    def get_bank_config_for_bank(self, bank_short_name: str):
+        """Get bank configuration for processing"""
         try:
             from src.accounting.bank_configs import get_bank_config
 
-            return get_bank_config(bank_code)
-        except ImportError:
-            self.logger.warning(
-                "Bank configs not available, using default BIDV config"
+            return get_bank_config(bank_short_name)
+        except Exception as e:
+            self.logger.error(
+                f"Error getting bank config for {bank_short_name}: {e}"
             )
-            from src.accounting.bank_statement_reader import BankStatementConfig
-
-            return BankStatementConfig()  # Default BIDV config
+            return None
 
     def get_bank_info_by_name(self, bank_name: str) -> Dict:
         """Get bank information by short name
@@ -600,11 +571,17 @@ class IntegratedBankProcessor:
             )
             # Look for account number pattern in the header rows
             # More specific pattern to match "Số tài khoản: 1410177655"
+            # And ACB pattern: "BẢNG SAO KÊ GIAO DỊCH - Số tài khoản (VND): 33388368"
             account_patterns = [
                 r"(?:số tài khoản|so tai khoan|account number|account|tk)[\s:]+([0-9]+)",
                 r"(?:stk|account number|account|tk)[\s:]+([0-9]+)",
                 r"(?:[0-9]{6,10})[\s\-\._:]+([0-9]{4})",  # Match last 4 digits specifically
                 r"\b(3840)\b",  # Match the specific account 3840 directly
+                # ACB-specific patterns
+                r"bảng sao kê giao dịch.*?số tài khoản.*?\(vnd\):\s*([0-9]+)",
+                r"bang sao ke giao dich.*?so tai khoan.*?\(vnd\):\s*([0-9]+)",
+                r"bảng sao kê.*?số tài khoản.*?([0-9]+)",
+                r"bang sao ke.*?so tai khoan.*?([0-9]+)",
             ]
 
             for _, row in header_df.iterrows():

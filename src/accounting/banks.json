@@ -43,9 +43,9 @@
     {
       "id": 21,
       "name": "Ngân hàng TMCP Quân đội",
-      "code": "MB",
+      "code": "MBB",
       "bin": "970422",
-      "shortName": "MBBank",
+      "shortName": "MBB",
       "swift_code": "MSCBVNVX"
     },
     {
