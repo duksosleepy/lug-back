@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from sapo_sync import SapoSyncRequest, sync_mysapo, sync_mysapogo
 from settings import app_settings
 from src.accounting.api import router as accounting_router
-from util import format_phone_number, validate_excel_file
+from util import validate_excel_file
 from util.logging import setup_logging
 from util.logging.middleware import setup_fastapi_logging
 
@@ -560,6 +560,9 @@ async def submit_warranty(request: WarrantyRequest):
     """
     Process warranty registration form submissions.
 
+    Frontend validation ensures phone number is valid using EXACT same regex as backend.
+    No need for backend phone validation since frontend uses identical logic.
+
     - Kiểm tra xem mã đơn hàng đã đăng ký chưa
     - Kiểm tra có trong bảng mtvvlryi3xc0gqd không
     - Tìm kiếm trong bảng mydoap8edbr206g để phát hiện đăng ký trùng
@@ -572,13 +575,9 @@ async def submit_warranty(request: WarrantyRequest):
         # Lấy xc-token từ biến môi trường
         xc_token = app_settings.xc_token
 
-        # Format số điện thoại
-        formatted_phone = format_phone_number(request.phone)
-        if formatted_phone is None:
-            return {
-                "success": False,
-                "message": "Số điện thoại không hợp lệ theo định dạng Việt Nam. Vui lòng kiểm tra và thử lại.",
-            }
+        # Phone number is already validated by frontend using EXACT same regex
+        # No need to validate again since frontend uses identical validation logic
+        formatted_phone = request.phone
         # First, check if the order code has already been registered
         order_code = request.order_code
         check_url = f"{app_settings.api_endpoint}/tables/miyw4f4yeojamv6/records?where=(ma_don_hang%2Ceq%2C{order_code})&limit=1"
