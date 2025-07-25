@@ -1079,6 +1079,31 @@ class IntegratedBankProcessor:
         )
         return None
 
+    def _detect_onl_kdv_po_pattern(self, description: str) -> bool:
+        """Detect ONL KDV PO pattern in transaction description"""
+        # Pattern supports both single and multiple PO numbers
+        pattern = r"ONL\s+KDV\s+PO\s+\w+"
+        return bool(re.search(pattern, description, re.IGNORECASE))
+
+    def _format_onl_kdv_po_description(self, description: str) -> Optional[str]:
+        """Format ONL KDV PO transaction description - handles single or multiple PO numbers"""
+        # More precise pattern to capture only PO numbers (alphanumeric codes starting with letters)
+        # This pattern looks for PO codes that start with letters and may contain numbers
+        pattern = r"ONL\s+KDV\s+PO\s+([A-Z][A-Z0-9]*(?:\s+[A-Z][A-Z0-9]*)*)"
+        match = re.search(pattern, description, re.IGNORECASE)
+
+        if match:
+            # Extract all PO numbers and take the last one
+            po_numbers_text = match.group(1).strip()
+            po_numbers = po_numbers_text.split()
+
+            if po_numbers:
+                # Always use the last PO number (for both single and multiple cases)
+                last_po_number = po_numbers[-1]
+                return f"Thu tiền KH ONLINE thanh toán cho PO: {last_po_number}"
+
+        return None
+
     def _normalize_vietnamese_text(self, text: str) -> str:
         """
         Normalize Vietnamese text for pattern matching by removing diacritics
@@ -2140,6 +2165,23 @@ class IntegratedBankProcessor:
                         f"Sang Tam transfer detected but formatting failed, using original: {description}"
                     )
 
+            # NEW BUSINESS LOGIC: Special handling for "ONL KDV PO" pattern
+            elif self._detect_onl_kdv_po_pattern(transaction.description):
+                formatted_onl_kdv_po_desc = self._format_onl_kdv_po_description(
+                    transaction.description
+                )
+                if formatted_onl_kdv_po_desc:
+                    description = formatted_onl_kdv_po_desc
+                    self.logger.info(
+                        f"Applied ONL KDV PO formatting: {description}"
+                    )
+                else:
+                    # Fallback to original description if formatting failed
+                    description = transaction.description
+                    self.logger.warning(
+                        f"ONL KDV PO pattern detected but formatting failed, using original: {description}"
+                    )
+
             # Apply NEW business logic for POS machine statements
             elif pos_code:
                 # Extract 4-digit code from description
@@ -2442,6 +2484,26 @@ def test_integrated_processor():
             description="CHUYEN TIEN TU TK VCB (7803) SANG TAM QUA TK ACB (8368) SANG TAM GD 023763-061425 18:11:43",
         )
 
+        # Test with ONL KDV PO example (single PO number)
+        example1c = RawTransaction(
+            reference="0771NE9A-9YKBRMYCD",
+            datetime=datetime(2025, 3, 3, 14, 30, 45),
+            debit_amount=0,
+            credit_amount=2500000,
+            balance=62565443,
+            description="ONL KDV PO DEF456",
+        )
+
+        # Test with ONL KDV PO example (multiple PO numbers)
+        example1d = RawTransaction(
+            reference="0771NE9A-0YKBRMYDE",
+            datetime=datetime(2025, 3, 4, 16, 45, 12),
+            debit_amount=0,
+            credit_amount=3750000,
+            balance=66315443,
+            description="ONL KDV PO SON19448 SON19538   Ma g iao dich  Trace372024 Trace 372024",
+        )
+
         example2 = RawTransaction(
             reference="0771NE9A-8YKBRMYAC",
             datetime=datetime(2025, 3, 2, 10, 15, 30),
@@ -2470,6 +2532,26 @@ def test_integrated_processor():
             print(f"Amount: {entry1b.amount1:,.0f}")
             print(f"Debit Account: {entry1b.debit_account}")
             print(f"Credit Account: {entry1b.credit_account}")
+
+        print("\nProcessing ONL KDV PO transaction (single PO number):")
+        entry1c = processor.process_transaction(example1c)
+        if entry1c:
+            print(f"Original: {example1c.description}")
+            print(f"Formatted: {entry1c.description}")
+            print(f"Document Type: {entry1c.document_type}")
+            print(f"Amount: {entry1c.amount1:,.0f}")
+            print(f"Debit Account: {entry1c.debit_account}")
+            print(f"Credit Account: {entry1c.credit_account}")
+
+        print("\nProcessing ONL KDV PO transaction (multiple PO numbers):")
+        entry1d = processor.process_transaction(example1d)
+        if entry1d:
+            print(f"Original: {example1d.description}")
+            print(f"Formatted: {entry1d.description}")
+            print(f"Document Type: {entry1d.document_type}")
+            print(f"Amount: {entry1d.amount1:,.0f}")
+            print(f"Debit Account: {entry1d.debit_account}")
+            print(f"Credit Account: {entry1d.credit_account}")
 
         print("\nProcessing transaction with counterparty extraction:")
         entry2 = processor.process_transaction(example2)
