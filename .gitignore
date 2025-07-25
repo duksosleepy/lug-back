@@ -11,24 +11,15 @@ wheels/
 /.lsp/
 /.clj-kondo/
 .env
-/src/accounting/danhmucbophan.xls
-/src/accounting/danhmucdoidtuong.xls
-/src/accounting/danhmucbophan.xls
-/src/accounting/danhmuckhoanmuc.xls
-/src/accounting/danhmucmaypos.xlsx
-/src/accounting/danhmuctaikhoan.xls
-/src/accounting/db_import.log
-/src/accounting/BIDV 3840.ods
-/src/accounting/BIDV 3840.xlsx
+/src/accounting/*.xls
+/src/accounting/*.log
+/src/accounting/*.ods
+/src/accounting/*.xlsx
 /src/accounting/banking_enterprise.db
 /src/accounting/banking_enterprise.db-shm
 /src/accounting/banking_enterprise.db-wal
 /src/accounting/test.db
 /src/accounting/test.sql
-/src/accounting/db_import.log
-/src/accounting/BIDV 3840.xlsx
-/src/accounting/BIDV 3840.ods
-/src/accounting/saoke.ods
-/src/accounting/trace.log
 /src/accounting/test.db-wal
 /src/accounting/index/
+/src/accounting/test/

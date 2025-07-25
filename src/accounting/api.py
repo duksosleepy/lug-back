@@ -102,6 +102,13 @@ def read_excel_with_fallback(input_buffer):
             logger.info(f"Attempting to read Excel with engine: {engine}")
             raw_df = pd.read_excel(input_buffer, header=None, engine=engine)
             logger.info(f"Successfully read Excel file with engine: {engine}")
+            logger.info(f"DataFrame shape: {raw_df.shape} (rows x columns)")
+            if (
+                raw_df.shape[1] > 15
+            ):  # If we have many columns, log this for MBBank
+                logger.info(
+                    f"Wide format detected with {raw_df.shape[1]} columns - suitable for MBBank"
+                )
             return raw_df
         except Exception as e:
             logger.warning(f"Engine {engine} failed: {str(e)}")
@@ -366,9 +373,24 @@ def find_header_row(
             )
             logger.debug(f"Normalized Row {row_idx}: {row_values}")
 
+            # Special debug for MBBank - check if BÚT TOÁN is in this row
+            if bank_config and bank_config.code == "MBB":
+                for col_idx, val in enumerate(df.iloc[row_idx].values):
+                    if pd.notna(val) and "BÚT TOÁN" in str(val).upper():
+                        logger.info(
+                            f"MBB: Found 'BÚT TOÁN' in Row {row_idx}, Column {col_idx}: '{val}'"
+                        )
+
         # Count how many headers we found in this row
         header_count = 0
         column_mapping = {}
+
+        # Enhanced debug for MBBank - show all columns in header row
+        if row_idx == 7 and bank_config and bank_config.code == "MBB":
+            logger.info(f"MBB Header Row {row_idx} - All columns:")
+            for col_idx, val in enumerate(df.iloc[row_idx].values):
+                if pd.notna(val) and str(val).strip():
+                    logger.info(f"  Column {col_idx}: '{val}'")
 
         for col_idx, cell_value in enumerate(row_values):
             # Skip empty values
@@ -511,6 +533,18 @@ def find_header_row(
                     logger.info(
                         f"MBB: Reference field mapped to column {ref_col_idx} with header '{ref_header}'"
                     )
+                elif bank_config.code == "MBB":
+                    logger.warning(
+                        f"MBB: Reference column not found in row {row_idx}. Available mappings: {column_mapping}"
+                    )
+                    # Try to find BÚT TOÁN manually
+                    for col_idx, val in enumerate(df.iloc[row_idx].values):
+                        if pd.notna(val) and "BÚT TOÁN" in str(val).upper():
+                            logger.info(
+                                f"MBB: Found 'BÚT TOÁN' manually in column {col_idx}: '{val}'"
+                            )
+                            column_mapping["reference"] = col_idx
+                            break
 
                 return row_idx, column_mapping
         else:
@@ -692,20 +726,38 @@ def extract_transactions(
 
                 record[col_name] = value
 
-        # For MBB: Only include rows that have a valid 'BÚT TOÁN' (reference) value
+        # For MBB: Include rows with valid 'BÚT TOÁN' (reference) value, but be more flexible
         if is_mbb_bank:
-            if (
+            # Check if we have a reference value (even if column mapping wasn't perfect)
+            has_reference = (
                 "reference" in record
                 and record["reference"]
                 and str(record["reference"]).strip()
-            ):
+            )
+
+            # For MBB, also check if we have transaction data (amount or description)
+            has_transaction_data = (
+                ("debit" in record and record["debit"] and record["debit"] != 0)
+                or (
+                    "credit" in record
+                    and record["credit"]
+                    and record["credit"] != 0
+                )
+                or (
+                    "description" in record
+                    and record["description"]
+                    and str(record["description"]).strip()
+                )
+            )
+
+            if has_reference or has_transaction_data:
                 data_rows.append(record)
                 logger.debug(
-                    f"MBB: Added row {row_idx} with BÚT TOÁN: '{record['reference']}'"
+                    f"MBB: Added row {row_idx} - reference: '{record.get('reference', 'N/A')}', has_data: {has_transaction_data}"
                 )
             else:
                 logger.debug(
-                    f"MBB: Skipped row {row_idx} - no valid BÚT TOÁN value"
+                    f"MBB: Skipped row {row_idx} - no reference and no transaction data"
                 )
         else:
             # Include ALL rows from the data area for other banks
@@ -916,6 +968,26 @@ async def process_bank_statement(file: UploadFile):
                                 )
                             else:
                                 # If no match in database, use a direct mapping for 3840
+                                logger.warning(
+                                    "Account code '3840' not found in database. Available account codes logged for debugging."
+                                )
+                                # Log some available account codes for debugging
+                                try:
+                                    from src.accounting.fast_search import (
+                                        search_accounts,
+                                    )
+
+                                    sample_accounts = search_accounts(
+                                        "3", field_name="code", limit=10
+                                    )
+                                    logger.info(
+                                        f"Sample accounts starting with '3': {[acc.get('code', 'N/A') for acc in sample_accounts]}"
+                                    )
+                                except Exception as e:
+                                    logger.warning(
+                                        f"Could not query sample accounts: {e}"
+                                    )
+
                                 logger.info(
                                     "Using hardcoded mapping for account 3840"
                                 )

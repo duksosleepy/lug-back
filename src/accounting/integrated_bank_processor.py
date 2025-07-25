@@ -572,6 +572,7 @@ class IntegratedBankProcessor:
             # Look for account number pattern in the header rows
             # More specific pattern to match "Số tài khoản: 1410177655"
             # And ACB pattern: "BẢNG SAO KÊ GIAO DỊCH - Số tài khoản (VND): 33388368"
+            # And MBBank pattern: "Tài khoản/Account No: 7432085703944"
             account_patterns = [
                 r"(?:số tài khoản|so tai khoan|account number|account|tk)[\s:]+([0-9]+)",
                 r"(?:stk|account number|account|tk)[\s:]+([0-9]+)",
@@ -582,6 +583,10 @@ class IntegratedBankProcessor:
                 r"bang sao ke giao dich.*?so tai khoan.*?\(vnd\):\s*([0-9]+)",
                 r"bảng sao kê.*?số tài khoản.*?([0-9]+)",
                 r"bang sao ke.*?so tai khoan.*?([0-9]+)",
+                # MBBank-specific patterns for single-cell format
+                r"tài khoản/account no:[\s]*([0-9]+)",
+                r"tai khoan/account no:[\s]*([0-9]+)",  # Non-diacritic version
+                r"account no:[\s]*([0-9]+)",  # English only version
             ]
 
             for _, row in header_df.iterrows():
@@ -627,13 +632,36 @@ class IntegratedBankProcessor:
                                     return account_match.code
 
                         # Check for adjacent cells containing account number (row 9 especially)
+                        # Also check for MBBank single-cell format
                         if (
                             "tai khoan" in cell_text
                             or "tài khoản" in cell_text
                             or "stk" in cell_text
                             or "account" in cell_text
                         ):
-                            # Check the next cell for the account number
+                            # First check if account number is in the same cell (MBBank format)
+                            for pattern in account_patterns:
+                                same_cell_match = re.search(
+                                    pattern, cell_text, re.IGNORECASE
+                                )
+                                if same_cell_match:
+                                    account_number = same_cell_match.group(1)
+                                    self.logger.info(
+                                        f"Found account number in same cell: {account_number}"
+                                    )
+
+                                    # Use the last 4 digits
+                                    last_4_digits = account_number[-4:]
+                                    account_match = self.find_account_by_code(
+                                        last_4_digits
+                                    )
+                                    if account_match:
+                                        self.logger.info(
+                                            f"Matched account number {last_4_digits} to account {account_match.code}"
+                                        )
+                                        return account_match.code
+
+                            # Then check the next cell for the account number (VCB format)
                             if col_idx + 1 < len(row) and pd.notna(
                                 row[col_idx + 1]
                             ):
@@ -733,33 +761,79 @@ class IntegratedBankProcessor:
         Returns:
             AccountMatch object or None
         """
+        self.logger.debug(f"Looking up account code: '{numeric_code}'")
+
         # Check cache first
         if numeric_code in self.account_cache:
             accounts = self.account_cache[numeric_code]
             if accounts:
                 # Return the first match
                 account = accounts[0]
+                self.logger.info(
+                    f"Found account '{numeric_code}' in cache: {account['code']} - {account['name']}"
+                )
                 return AccountMatch(
                     code=account["code"],
                     name=account["name"],
                     numeric_code=numeric_code,
                     position=0,
                 )
+        else:
+            self.logger.debug(
+                f"Account code '{numeric_code}' not found in cache"
+            )
 
         # If not found in cache, use fast_search
         from src.accounting.fast_search import search_accounts
 
-        # Try to find accounts that contain this numeric code in their name
+        # Try multiple search strategies
+        # 1. Search by name (original logic)
         results = search_accounts(numeric_code, field_name="name", limit=1)
-
         if results:
             result = results[0]
+            self.logger.info(
+                f"Found account '{numeric_code}' via name search: {result['code']} - {result['name']}"
+            )
             return AccountMatch(
                 code=result["code"],
                 name=result["name"],
                 numeric_code=numeric_code,
                 position=0,
             )
+
+        # 2. Search by code directly (new strategy for direct account code lookups)
+        try:
+            code_results = search_accounts(
+                numeric_code, field_name="code", limit=1
+            )
+            if code_results:
+                result = code_results[0]
+                self.logger.info(
+                    f"Found account '{numeric_code}' via code search: {result['code']} - {result['name']}"
+                )
+                return AccountMatch(
+                    code=result["code"],
+                    name=result["name"],
+                    numeric_code=numeric_code,
+                    position=0,
+                )
+        except Exception as e:
+            self.logger.debug(f"Code search failed for '{numeric_code}': {e}")
+        else:
+            self.logger.warning(
+                f"Account code '{numeric_code}' not found in database"
+            )
+            # Log some similar accounts for debugging
+            try:
+                if len(numeric_code) >= 2:
+                    partial_results = search_accounts(
+                        numeric_code[:2], field_name="name", limit=5
+                    )
+                    self.logger.debug(
+                        f"Similar accounts starting with '{numeric_code[:2]}': {[acc.get('code', 'N/A') for acc in partial_results]}"
+                    )
+            except Exception as e:
+                self.logger.debug(f"Could not search for similar accounts: {e}")
 
         return None
 
