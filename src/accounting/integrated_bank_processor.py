@@ -978,6 +978,107 @@ class IntegratedBankProcessor:
 
         return cleaned_code
 
+    def format_sang_tam_transfer_description(
+        self, description: str
+    ) -> Optional[str]:
+        """
+        Format transfer descriptions that contain 'Sang Tam' between two bank accounts.
+
+        This handles business logic for inter-bank transfers where both accounts
+        belong to "Sáng Tâm" entity, standardizing the description format.
+
+        Examples:
+        Input:  "CHUYEN TIEN TU TK VCB (7803) SANG TAM QUA TK ACB (8368) SANG TAM GD 023763-061425 18:11:43"
+        Output: "Chuyển tiền từ TK VCB (7803) Sáng Tâm qua TK ACB (8368) Sáng Tâm"
+
+        Input:  "Chuyen tien tu TK BIDV 3840 Sang Tam qua TK BIDV 7655 Sang Tam"
+        Output: "Chuyển tiền từ TK BIDV (3840) Sáng Tâm qua TK BIDV (7655) Sáng Tâm"
+
+        Args:
+            description: Original transaction description
+
+        Returns:
+            Formatted description or None if not a Sang Tam transfer
+        """
+        if not description:
+            return None
+
+        # Normalize for pattern matching (case insensitive)
+        normalized_desc = description.upper().strip()
+
+        # Check if this is a Sang Tam transfer (must contain transfer keywords AND Sang Tam)
+        transfer_keywords = ["CHUYEN TIEN", "CHUYEN KHOAN", "TRANSFER"]
+        has_transfer_keyword = any(
+            keyword in normalized_desc for keyword in transfer_keywords
+        )
+        has_sang_tam = "SANG TAM" in normalized_desc
+
+        if not (has_transfer_keyword and has_sang_tam):
+            return None
+
+        self.logger.info(f"Detected Sang Tam transfer: {description}")
+
+        # Pattern 1: Bank name with account in parentheses (VCB (7803))
+        # Handles: "TU TK VCB (7803) SANG TAM QUA TK ACB (8368) SANG TAM"
+        pattern1 = r"tu\s+tk\s+([A-Z]+)\s*\((\d+)\)\s+sang\s+tam.*?qua\s+tk\s+([A-Z]+)\s*\((\d+)\)\s+sang\s+tam"
+        match1 = re.search(pattern1, normalized_desc, re.IGNORECASE)
+
+        if match1:
+            source_bank = match1.group(1)
+            source_account = match1.group(2)
+            dest_bank = match1.group(3)
+            dest_account = match1.group(4)
+
+            formatted_desc = f"Chuyển tiền từ TK {source_bank} ({source_account}) Sáng Tâm qua TK {dest_bank} ({dest_account}) Sáng Tâm"
+            self.logger.info(
+                f"Formatted Sang Tam transfer (Pattern 1): {formatted_desc}"
+            )
+            return formatted_desc
+
+        # Pattern 2: Bank name with separate account number (BIDV 3840)
+        # Handles: "TU TK BIDV 3840 SANG TAM QUA TK BIDV 7655 SANG TAM"
+        pattern2 = r"tu\s+tk\s+([A-Z]+)\s+(\d+)\s+sang\s+tam.*?qua\s+tk\s+([A-Z]+)\s+(\d+)\s+sang\s+tam"
+        match2 = re.search(pattern2, normalized_desc, re.IGNORECASE)
+
+        if match2:
+            source_bank = match2.group(1)
+            source_account = match2.group(2)
+            dest_bank = match2.group(3)
+            dest_account = match2.group(4)
+
+            formatted_desc = f"Chuyển tiền từ TK {source_bank} ({source_account}) Sáng Tâm qua TK {dest_bank} ({dest_account}) Sáng Tâm"
+            self.logger.info(
+                f"Formatted Sang Tam transfer (Pattern 2): {formatted_desc}"
+            )
+            return formatted_desc
+
+        # Pattern 3: Mixed format - handle cases where one account has parentheses and one doesn't
+        # This is a fallback pattern for edge cases
+        pattern3 = r"tu\s+tk\s+([A-Z]+)\s*(?:\((\d+)\)|(\d+))\s+sang\s+tam.*?qua\s+tk\s+([A-Z]+)\s*(?:\((\d+)\)|(\d+))\s+sang\s+tam"
+        match3 = re.search(pattern3, normalized_desc, re.IGNORECASE)
+
+        if match3:
+            source_bank = match3.group(1)
+            source_account = match3.group(2) or match3.group(
+                3
+            )  # One of these will be None
+            dest_bank = match3.group(4)
+            dest_account = match3.group(5) or match3.group(
+                6
+            )  # One of these will be None
+
+            formatted_desc = f"Chuyển tiền từ TK {source_bank} ({source_account}) Sáng Tâm qua TK {dest_bank} ({dest_account}) Sáng Tâm"
+            self.logger.info(
+                f"Formatted Sang Tam transfer (Pattern 3): {formatted_desc}"
+            )
+            return formatted_desc
+
+        # If we get here, it contains Sang Tam and transfer keywords but doesn't match our patterns
+        self.logger.warning(
+            f"Sang Tam transfer detected but couldn't parse account details: {description}"
+        )
+        return None
+
     def _normalize_vietnamese_text(self, text: str) -> str:
         """
         Normalize Vietnamese text for pattern matching by removing diacritics
@@ -2017,6 +2118,28 @@ class IntegratedBankProcessor:
                 # Reset the flag for next transaction
                 self._current_transaction_is_interest_payment = False
 
+            # NEW BUSINESS LOGIC: Special handling for "Sang Tam" transfer transactions
+            elif "sang tam" in transaction.description.lower() and any(
+                keyword in transaction.description.lower()
+                for keyword in ["chuyen tien", "chuyen khoan", "transfer"]
+            ):
+                formatted_transfer_desc = (
+                    self.format_sang_tam_transfer_description(
+                        transaction.description
+                    )
+                )
+                if formatted_transfer_desc:
+                    description = formatted_transfer_desc
+                    self.logger.info(
+                        f"Applied Sang Tam transfer formatting: {description}"
+                    )
+                else:
+                    # Fallback to original description if formatting failed
+                    description = transaction.description
+                    self.logger.warning(
+                        f"Sang Tam transfer detected but formatting failed, using original: {description}"
+                    )
+
             # Apply NEW business logic for POS machine statements
             elif pos_code:
                 # Extract 4-digit code from description
@@ -2299,7 +2422,7 @@ def test_integrated_processor():
     if processor.connect():
         print("Connected to database successfully")
 
-        # Test with example transaction
+        # Test with example transaction for Sang Tam transfer
         example1 = RawTransaction(
             reference="0771NE9A-7YKBRMYAB",
             datetime=datetime(2025, 3, 1, 11, 17, 53),
@@ -2307,6 +2430,16 @@ def test_integrated_processor():
             credit_amount=0,
             balance=55065443,
             description="Chuyen tien tu TK BIDV 3840 Sang Tam qua TK BIDV 7655 Sang Tam",
+        )
+
+        # Test with VCB-ACB transfer example
+        example1b = RawTransaction(
+            reference="0771NE9A-7YKBRMYBC",
+            datetime=datetime(2025, 3, 1, 11, 17, 53),
+            debit_amount=50000000,
+            credit_amount=0,
+            balance=55065443,
+            description="CHUYEN TIEN TU TK VCB (7803) SANG TAM QUA TK ACB (8368) SANG TAM GD 023763-061425 18:11:43",
         )
 
         example2 = RawTransaction(
@@ -2318,16 +2451,25 @@ def test_integrated_processor():
             description="CK den tu CTY TNHH THUONG MAI DICH VU ABC thanh toan hoa don",
         )
 
-        print("\nProcessing transaction with account codes 3840 and 7655:")
+        print("\nProcessing BIDV Sang Tam transfer (3840 -> 7655):")
         entry1 = processor.process_transaction(example1)
         if entry1:
+            print(f"Original: {example1.description}")
+            print(f"Formatted: {entry1.description}")
             print(f"Document Type: {entry1.document_type}")
-            print(f"Date: {entry1.date}")
-            print(f"Document Number: {entry1.document_number}")
-            print(f"Description: {entry1.description}")
             print(f"Amount: {entry1.amount1:,.0f}")
             print(f"Debit Account: {entry1.debit_account}")
             print(f"Credit Account: {entry1.credit_account}")
+
+        print("\nProcessing VCB-ACB Sang Tam transfer (7803 -> 8368):")
+        entry1b = processor.process_transaction(example1b)
+        if entry1b:
+            print(f"Original: {example1b.description}")
+            print(f"Formatted: {entry1b.description}")
+            print(f"Document Type: {entry1b.document_type}")
+            print(f"Amount: {entry1b.amount1:,.0f}")
+            print(f"Debit Account: {entry1b.debit_account}")
+            print(f"Credit Account: {entry1b.credit_account}")
 
         print("\nProcessing transaction with counterparty extraction:")
         entry2 = processor.process_transaction(example2)

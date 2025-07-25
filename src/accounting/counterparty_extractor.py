@@ -162,7 +162,33 @@ class CounterpartyExtractor:
             (r"SO TK\s+(\d{5,})", "account_ref"),
             # BIDV specific patterns
             (r"BIDV\s+(\d{4})", "bidv_account"),
-            # Transfer patterns
+            # Enhanced patterns for Sang Tam transfers - bank name with account in parentheses
+            (
+                r"TK\s+[A-Z]+\s*\((\d+)\)",
+                "bank_account_parentheses",
+            ),  # TK VCB (7803), TK ACB (8368)
+            (
+                r"TK\s+([A-Z]+)\s+(\d{4,})",
+                "bank_account_with_name",
+            ),  # TK BIDV 3840, TK VCB 7803
+            # Enhanced transfer patterns for Sang Tam transfers
+            (
+                r"TU\s+TK\s+[A-Z]+\s*\((\d+)\)",
+                "from_account_parentheses",
+            ),  # from TK VCB (7803)
+            (
+                r"(?:QUA|SANG)\s+TK\s+[A-Z]+\s*\((\d+)\)",
+                "to_account_parentheses",
+            ),  # qua TK ACB (8368)
+            (
+                r"TU\s+TK\s+[A-Z]+\s+(\d{4,})",
+                "from_account_with_name",
+            ),  # from TK BIDV 3840
+            (
+                r"(?:QUA|SANG)\s+TK\s+[A-Z]+\s+(\d{4,})",
+                "to_account_with_name",
+            ),  # qua TK BIDV 7655
+            # Original transfer patterns (kept for backward compatibility)
             (r"TU\s+(?:TK\s+)?(\d{5,}).*?(?:DEN|QUA|SANG)", "from_account"),
             (r"(?:DEN|QUA|SANG)\s+(?:TK\s+)?(\d{5,})", "to_account"),
         ]
@@ -556,7 +582,24 @@ class CounterpartyExtractor:
 
         for pattern, acc_type in self.account_patterns:
             for match in re.finditer(pattern, description):
-                code = match.group(1)
+                # Handle patterns with multiple capturing groups
+                if acc_type == "bank_account_with_name":
+                    # Pattern: TK BANK_NAME ACCOUNT_NUMBER (captures bank name and account number)
+                    # We want the account number (second group)
+                    if match.lastindex >= 2:
+                        code = match.group(
+                            2
+                        )  # Account number is in the second group
+                        bank_name = match.group(
+                            1
+                        )  # Bank name is in the first group
+                    else:
+                        continue  # Skip if pattern doesn't match as expected
+                else:
+                    # Standard patterns with single capturing group
+                    code = match.group(1)
+                    bank_name = None
+
                 span = match.span()
 
                 # Check for overlap
@@ -570,19 +613,42 @@ class CounterpartyExtractor:
                     # Set confidence based on type
                     confidence = (
                         0.9
-                        if acc_type in ["bank_account", "account_ref"]
+                        if acc_type
+                        in [
+                            "bank_account",
+                            "account_ref",
+                            "bank_account_parentheses",
+                            "bank_account_with_name",
+                        ]
                         else 0.8
                     )
 
-                    accounts.append(
-                        {
-                            "code": code,
-                            "type": acc_type,
-                            "position": span[0],
-                            "confidence": confidence,
-                            "span": span,
-                        }
-                    )
+                    account_info = {
+                        "code": code,
+                        "type": acc_type,
+                        "position": span[0],
+                        "confidence": confidence,
+                        "span": span,
+                    }
+
+                    # Add bank name if available for enhanced patterns
+                    if bank_name:
+                        account_info["bank_name"] = bank_name
+                        self.logger.info(
+                            f"Sang Tam Pattern Match: Extracted account '{code}' with bank '{bank_name}' using pattern type '{acc_type}' from position {span[0]}"
+                        )
+                    elif acc_type in [
+                        "bank_account_parentheses",
+                        "from_account_parentheses",
+                        "to_account_parentheses",
+                        "from_account_with_name",
+                        "to_account_with_name",
+                    ]:
+                        self.logger.info(
+                            f"Sang Tam Pattern Match: Extracted account '{code}' using enhanced pattern type '{acc_type}' from position {span[0]}"
+                        )
+
+                    accounts.append(account_info)
                     matched_spans.append(span)
 
         # Sort by position in text
@@ -1062,7 +1128,7 @@ class CounterpartyExtractor:
         # Step 4: Apply BONUS CONDITION - Filter by name = "KHÁCH LẺ KHÔNG LẤY HOÁ ĐƠN"
         bonus_condition_name = "KHÁCH LẺ KHÔNG LẤY HOÁ ĐƠN"
         filtered_matches = []
-        
+
         for match in counterparty_matches:
             match_name = match.get("name", "").strip()
             if match_name == bonus_condition_name:
@@ -1070,19 +1136,23 @@ class CounterpartyExtractor:
                 self.logger.info(
                     f"POS BONUS CONDITION: Found counterparty with code '{match['code']}' and name '{match_name}'"
                 )
-        
+
         # Step 5: Use filtered results if available, otherwise fallback to original results
         if filtered_matches:
             self.logger.info(
                 f"POS BONUS CONDITION: Using {len(filtered_matches)} filtered matches (name = '{bonus_condition_name}')"
             )
             best_counterparty = filtered_matches[0]  # Use first filtered match
-            condition_applied = "pos_machine_counterparty_logic_with_bonus_condition"
+            condition_applied = (
+                "pos_machine_counterparty_logic_with_bonus_condition"
+            )
         else:
             self.logger.info(
                 f"POS BONUS CONDITION: No matches found with name '{bonus_condition_name}', using original results"
             )
-            best_counterparty = counterparty_matches[0]  # Use original best match
+            best_counterparty = counterparty_matches[
+                0
+            ]  # Use original best match
             condition_applied = "pos_machine_counterparty_logic_original"
 
         # Step 6: Return the best counterparty match
