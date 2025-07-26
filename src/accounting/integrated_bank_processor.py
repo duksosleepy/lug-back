@@ -1965,8 +1965,22 @@ class IntegratedBankProcessor:
                     self.logger.info(
                         "Detected POS machine object, applying POS machine counterparty logic"
                     )
+
+                    # Determine current address for POS machine logic
+                    current_address = None
+
+                    # Option 1: Use bank address from current_bank_info
+                    if self.current_bank_info and self.current_bank_info.get(
+                        "address"
+                    ):
+                        current_address = self.current_bank_info["address"]
+                        self.logger.info(
+                            f"Using bank address as current_address: {current_address}"
+                        )
+
+                    # Call the enhanced POS machine logic with address parameter
                     counterparty_info = self.counterparty_extractor.handle_pos_machine_counterparty_logic(
-                        extracted_pos_machines
+                        extracted_pos_machines, current_address=current_address
                     )
 
                     # If POS machine logic failed, fall back to default
