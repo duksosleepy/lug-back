@@ -195,6 +195,13 @@ class IntegratedBankProcessor:
             (r"STK\s+(\d+)", "account_ref"),
             (r"tai\s+khoan\s+(\d+)", "account_ref"),
             (r"so\s+TK\s+(\d+)", "account_ref"),
+            # Phone number patterns for MBB online detection
+            (
+                r"\b0[3|5|7|8|9][\s\-\.]*\d{3}[\s\-\.]*\d{3}[\s\-\.]*\d{3}\b",
+                "phone_number_with_spaces",
+            ),
+            (r"\b[3|5|7|8|9]\d{8,9}\b", "phone_number_no_leading_zero"),
+            (r"\b\+?84[3|5|7|8|9]\d{8}\b", "phone_number_international"),
         ]
 
         # Transfer patterns to identify source and destination
@@ -252,6 +259,18 @@ class IntegratedBankProcessor:
             "Thanh toan lai": "5154",  # Interest payment
             "thanh toan tien hang": "13682",  # Goods payment
             "hoan tien": "1311",
+            "TRICH TAI KHOAN": "34111",  # Loan payment
+            "THU NV": "6354",  # Loan interest payment
+            "GNOL": "34111",  # Loan disbursement
+            "NT": "1111",  # Cash deposit
+            "GHTK": "1311",  # GHTK payment (NEW)
+            "GIAOHANGTIETKIEM": "1311",  # Alternative for GHTK (NEW)
+            "GIAI NGAN": "34111",  # Loan disbursement (NEW)
+            "GIAI NGAN TKV": "34111",  # Alternative for loan disbursement (NEW)
+            "PHI TT": "6427",  # Transaction fee (NEW)
+            "THU PHI TT": "6427",  # Transaction fee alternative (NEW)
+            "LAI NHAP VON": "811",  # Interest income (NEW)
+            "TRICH THU TIEN VAY - LAI": "6354",  # Loan interest payment (NEW)
         }
 
     def _load_bank_info(self):
@@ -1104,6 +1123,92 @@ class IntegratedBankProcessor:
 
         return None
 
+    def _detect_phone_number_in_description(self, description: str) -> bool:
+        """
+        Detect Vietnamese phone numbers in transaction description
+
+        Vietnamese phone number patterns with real-world variations:
+        - With leading zero: 0xxxxxxxxx
+        - Without leading zero: xxxxxxxxx (9-10 digits)
+        - With spaces: "0903 999 057", "0903-999-057", "0903.999.057"
+        - Without spaces: "0903999057"
+        - International format: +84xxxxxxxxx, 84xxxxxxxxx
+        """
+        if not description:
+            return False
+
+        # Remove common separators to normalize the number
+        normalized_desc = re.sub(r"[-.\ ]", "", description)
+
+        # Vietnamese phone number patterns (comprehensive)
+        phone_patterns = [
+            # Standard format with leading zero (10 digits)
+            r"\b0[3|5|7|8|9]\d{8}\b",
+            # Format with spaces, dashes, or dots
+            r"\b0[3|5|7|8|9][\s\-\.]*\d{3}[\s\-\.]*\d{3}[\s\-\.]*\d{3}\b",  # 0xxx xxx xxx
+            r"\b0[3|5|7|8|9][\s\-\.]*\d{4}[\s\-\.]*\d{4}\b",  # 0xxx xxxx xxxx
+            r"\b0[3|5|7|8|9][\s\-\.]*\d{2}[\s\-\.]*\d{3}[\s\-\.]*\d{3}\b",  # 0xx xxx xxx
+            # Without leading zero (9-10 digits) - common in bank systems
+            r"\b[3|5|7|8|9]\d{8,9}\b",  # 9xxxxxxxx or 9xxxxxxxxx
+            # International format
+            r"\b\+84[3|5|7|8|9]\d{8}\b",  # +84xxxxxxxxx
+            r"\b84[3|5|7|8|9]\d{8}\b",  # 84xxxxxxxxx
+        ]
+
+        # First check original description (with spaces/separators)
+        for pattern in phone_patterns:
+            if re.search(pattern, description, re.IGNORECASE):
+                match = re.search(pattern, description, re.IGNORECASE)
+                self.logger.info(
+                    f"Detected Vietnamese phone number '{match.group()}' in description: {description}"
+                )
+                return True
+
+        # Then check normalized description (without separators)
+        for pattern in phone_patterns:
+            if re.search(pattern, normalized_desc, re.IGNORECASE):
+                match = re.search(pattern, normalized_desc, re.IGNORECASE)
+                self.logger.info(
+                    f"Detected Vietnamese phone number '{match.group()}' in normalized description: {normalized_desc}"
+                )
+                return True
+
+        return False
+
+    def _extract_phone_number_from_description(self, description: str) -> str:
+        """
+        Extract the actual phone number from description for logging/debugging
+
+        Returns:
+            The phone number found, or empty string if none found
+        """
+        if not description:
+            return ""
+
+        # Comprehensive phone number extraction
+        normalized_desc = re.sub(r"[-.\ ]", "", description)
+
+        extraction_patterns = [
+            r"\b(0[3|5|7|8|9]\d{8})\b",
+            r"\b([3|5|7|8|9]\d{8,9})\b",
+            r"\b(\+84[3|5|7|8|9]\d{8})\b",
+            r"\b(84[3|5|7|8|9]\d{8})\b",
+        ]
+
+        # Try original description first
+        for pattern in extraction_patterns:
+            match = re.search(pattern, description, re.IGNORECASE)
+            if match:
+                return match.group(1)
+
+        # Try normalized description
+        for pattern in extraction_patterns:
+            match = re.search(pattern, normalized_desc, re.IGNORECASE)
+            if match:
+                return match.group(1)
+
+        return ""
+
     def _normalize_vietnamese_text(self, text: str) -> str:
         """
         Normalize Vietnamese text for pattern matching by removing diacritics
@@ -1944,86 +2049,142 @@ class IntegratedBankProcessor:
                 "counterparties", []
             )
 
-            # Priority 1: If extracted object is an account
-            if extracted_accounts:
-                self.logger.info(
-                    "Detected account object, using Sáng Tâm company info"
+            # **PRIORITY 0 (HIGHEST): MBB Phone Number Detection for Online Transactions**
+            # Check if current bank is MBB and transaction description contains phone number
+            if (
+                self.current_bank_name
+                and self.current_bank_name.upper() == "MBB"
+                and self._detect_phone_number_in_description(
+                    transaction.description
                 )
+            ):
+                # Extract the phone number for logging
+                phone_number = self._extract_phone_number_from_description(
+                    transaction.description
+                )
+
+                self.logger.info(
+                    f"MBB Online Transaction Detected: Bank={self.current_bank_name}, "
+                    f"Phone={phone_number}, Description={transaction.description}"
+                )
+
+                # Apply MBB online transaction business logic
                 counterparty_info = {
-                    "code": "31754",
-                    "name": "Công Ty TNHH Sáng Tâm",
-                    "address": "32-34 Đường 74, Phường 10, Quận 6, Tp. Hồ Chí Minh",
-                    "source": "hardcoded_account_rule",
-                    "condition_applied": "account_detected",
-                    "phone": "",
+                    "code": "KLONLINE",
+                    "name": "KHÁCH LẺ KHÔNG LẤY HÓA ĐƠN (ONLINE)",
+                    "address": "4 Grand Canal Square, Grand Canal Harbour, Dublin 2, Ireland",
+                    "source": "mbb_phone_number_detection",
+                    "condition_applied": "mbb_online_phone_detected",
+                    "phone": phone_number,
                     "tax_id": "",
                 }
-            # Priority 2: If extracted object is POS machine or counterparty
-            elif extracted_pos_machines or extracted_counterparties:
-                if extracted_pos_machines:
-                    # Use POS machine counterparty logic (gets counterparty from department_code)
-                    self.logger.info(
-                        "Detected POS machine object, applying POS machine counterparty logic"
+
+                # Modify description for MBB phone transactions
+                # Extract PO number if available
+                po_match = re.search(
+                    r"PO\s*[:-]?\s*([A-Z0-9]+)",
+                    transaction.description,
+                    re.IGNORECASE,
+                )
+                po_number = po_match.group(1) if po_match else ""
+
+                # Set description
+                if po_number:
+                    description = (
+                        f"Thu tiền KH online thanh toán cho PO: {po_number}"
                     )
-
-                    # Determine current address for POS machine logic
-                    current_address = None
-
-                    # Option 1: Use bank address from current_bank_info
-                    if self.current_bank_info and self.current_bank_info.get(
-                        "address"
-                    ):
-                        current_address = self.current_bank_info["address"]
-                        self.logger.info(
-                            f"Using bank address as current_address: {current_address}"
-                        )
-
-                    # Call the enhanced POS machine logic with address parameter
-                    counterparty_info = self.counterparty_extractor.handle_pos_machine_counterparty_logic(
-                        extracted_pos_machines, current_address=current_address
-                    )
-
-                    # If POS machine logic failed, fall back to default
-                    if not counterparty_info:
-                        self.logger.warning(
-                            "POS machine counterparty logic failed, using default counterparty"
-                        )
-                        counterparty_info = {
-                            "code": "KL",
-                            "name": "Khách Lẻ Không Lấy Hóa Đơn",
-                            "address": "",
-                            "source": "default_after_pos_failure",
-                            "condition_applied": "pos_machine_failed",
-                            "phone": "",
-                            "tax_id": "",
-                        }
                 else:
-                    # Use counterparty info directly
-                    cp_info = extracted_counterparties[
-                        0
-                    ]  # Take first/best match
+                    description = "Thu tiền KH online thanh toán"
+
+                self.logger.info(
+                    f"Applied MBB online counterparty logic: Code={counterparty_info['code']}, "
+                    f"Name={counterparty_info['name']}, Phone={phone_number}"
+                )
+            else:
+                # Only apply existing counterparty logic if MBB phone number detection didn't trigger
+
+                # Priority 1: If extracted object is an account
+                if extracted_accounts:
                     self.logger.info(
-                        f"Detected counterparty object, using extracted info: {cp_info.get('name', cp_info.get('code', ''))}"
+                        "Detected account object, using Sáng Tâm company info"
                     )
                     counterparty_info = {
-                        "code": cp_info.get("code"),
-                        "name": cp_info.get(
-                            "name", cp_info.get("extracted_name", "")
-                        ),
-                        "address": cp_info.get("address", ""),
-                        "source": "counterparty_extracted",
-                        "condition_applied": "counterparty_detected",
-                        "phone": cp_info.get("phone", ""),
-                        "tax_id": cp_info.get("tax_id", ""),
+                        "code": "31754",
+                        "name": "Công Ty TNHH Sáng Tâm",
+                        "address": "32-34 Đường 74, Phường 10, Quận 6, Tp. Hồ Chí Minh",
+                        "source": "hardcoded_account_rule",
+                        "condition_applied": "account_detected",
+                        "phone": "",
+                        "tax_id": "",
                     }
-            # Priority 3: Fall back to existing two-condition logic
-            else:
-                self.logger.info(
-                    "No specific object detected, using existing two-condition logic"
-                )
-                counterparty_info = self.counterparty_extractor.handle_counterparty_two_conditions(
-                    extracted_counterparties
-                )
+                # Priority 2: If extracted object is POS machine or counterparty
+                elif extracted_pos_machines or extracted_counterparties:
+                    if extracted_pos_machines:
+                        # Use POS machine counterparty logic (gets counterparty from department_code)
+                        self.logger.info(
+                            "Detected POS machine object, applying POS machine counterparty logic"
+                        )
+
+                        # Determine current address for POS machine logic
+                        current_address = None
+
+                        # Option 1: Use bank address from current_bank_info
+                        if (
+                            self.current_bank_info
+                            and self.current_bank_info.get("address")
+                        ):
+                            current_address = self.current_bank_info["address"]
+                            self.logger.info(
+                                f"Using bank address as current_address: {current_address}"
+                            )
+
+                        # Call the enhanced POS machine logic with address parameter
+                        counterparty_info = self.counterparty_extractor.handle_pos_machine_counterparty_logic(
+                            extracted_pos_machines,
+                            current_address=current_address,
+                        )
+
+                        # If POS machine logic failed, fall back to default
+                        if not counterparty_info:
+                            self.logger.warning(
+                                "POS machine counterparty logic failed, using default counterparty"
+                            )
+                            counterparty_info = {
+                                "code": "KL",
+                                "name": "Khách Lẻ Không Lấy Hóa Đơn",
+                                "address": "",
+                                "source": "default_after_pos_failure",
+                                "condition_applied": "pos_machine_failed",
+                                "phone": "",
+                                "tax_id": "",
+                            }
+                    else:
+                        # Use counterparty info directly
+                        cp_info = extracted_counterparties[
+                            0
+                        ]  # Take first/best match
+                        self.logger.info(
+                            f"Detected counterparty object, using extracted info: {cp_info.get('name', cp_info.get('code', ''))}"
+                        )
+                        counterparty_info = {
+                            "code": cp_info.get("code"),
+                            "name": cp_info.get(
+                                "name", cp_info.get("extracted_name", "")
+                            ),
+                            "address": cp_info.get("address", ""),
+                            "source": "counterparty_extracted",
+                            "condition_applied": "counterparty_detected",
+                            "phone": cp_info.get("phone", ""),
+                            "tax_id": cp_info.get("tax_id", ""),
+                        }
+                # Priority 3: Fall back to existing two-condition logic
+                else:
+                    self.logger.info(
+                        "No specific object detected, using existing two-condition logic"
+                    )
+                    counterparty_info = self.counterparty_extractor.handle_counterparty_two_conditions(
+                        extracted_counterparties
+                    )
 
             # Extract counterparty details from the result
             counterparty_code = (
@@ -2272,10 +2433,170 @@ class IntegratedBankProcessor:
                             f"Applied enhanced 'Phí cà thẻ' logic with bank info from filename: {description}\n"
                             f"Counterparty Code: {counterparty_code}, Counterparty Name: {counterparty_name}"
                         )
+            # RULE 1 & 2: Special handling for "TRICH TAI KHOAN" patterns
+            elif "TRICH TAI KHOAN" in transaction.description.upper():
+                # Extract the account number from the description
+                account_match = re.search(
+                    r"TK VAY (\d+)", transaction.description.upper()
+                )
+                if account_match:
+                    account_number = account_match.group(1)
+
+                    # Check if it's "THANH LY" or "TRA NO TRUOC HAN" or "THU THANH LY"
+                    if (
+                        "THANH LY" in transaction.description.upper()
+                        or "THU THANH LY" in transaction.description.upper()
+                    ):
+                        description = (
+                            f"Trả hết nợ gốc TK vay KU {account_number}"
+                        )
+                        # Set account to 34111
+                        debit_account = "34111"
+                        credit_account = self.default_bank_account
+                    elif "TRA NO TRUOC HAN" in transaction.description.upper():
+                        description = (
+                            f"Trả nợ trược hạn TK vay KU {account_number}"
+                        )
+                    else:
+                        description = transaction.description
+
+                    self.logger.info(
+                        f"Applied TRICH TAI KHOAN formatting: {description}"
+                    )
+                else:
+                    description = transaction.description
+                    self.logger.warning(
+                        f"TRICH TAI KHOAN pattern detected but couldn't extract account number: {description}"
+                    )
+
+            # RULE 3: Special handling for "THU NV" pattern
+            elif "##THU NV" in transaction.description.upper():
+                # Extract the account number
+                account_match = re.search(
+                    r"##THU NV (\d+)##", transaction.description.upper()
+                )
+                if account_match:
+                    account_number = account_match.group(1)
+                    description = f"Trả lãi vay KU {account_number}"
+                    self.logger.info(
+                        f"Applied THU NV formatting: {description}"
+                    )
+                else:
+                    description = transaction.description
+                    self.logger.warning(
+                        f"THU NV pattern detected but couldn't extract account number: {description}"
+                    )
+
+            # RULE 4: Special handling for "GNOL" pattern
+            elif "GNOL" in transaction.description.upper():
+                # Extract the account number
+                account_match = re.search(
+                    r"GNOL \S+\s+(\d+)", transaction.description.upper()
+                )
+                if account_match:
+                    account_number = account_match.group(1)
+                    description = f"Nhận giải ngân HĐGN {account_number}"
+                    self.logger.info(f"Applied GNOL formatting: {description}")
+                else:
+                    description = transaction.description
+                    self.logger.warning(
+                        f"GNOL pattern detected but couldn't extract account number: {description}"
+                    )
+
+            # RULE 5: Special handling for bank deposits with "NT" pattern
+            elif "#NT##" in transaction.description.upper() or (
+                "#" in transaction.description.upper()
+                and "NT" in transaction.description.upper()
+            ):
+                # Look for pattern matching the example: "MACH QUANG MINH#079094018572#NT##"
+                # Determine bank code for this file
+                bank_code = self.current_bank_name or "NH"
+                description = f"Nộp tiền vào TK NH {bank_code}"
+                self.logger.info(
+                    f"Applied NT bank deposit formatting: {description}"
+                )
+
+            # RULE 3: THU PHI TT pattern
+            elif "THU PHI TT SO" in transaction.description.upper():
+                description = "Phí TTQT"
+                # Set account to 6427
+                debit_account = "6427"
+                credit_account = self.default_bank_account
+                self.logger.info(
+                    f"Applied THU PHI TT formatting: {description}"
+                )
+
+            # RULE 4: GHTK pattern
+            elif (
+                "GHTKJSC-GIAOHANGTIETKIEM" in transaction.description.upper()
+                or "GHTK" in transaction.description.upper()
+            ):
+                description = "GHTK thanh toán tiền thu hộ theo bảng kê"
+                self.logger.info(f"Applied GHTK formatting: {description}")
+
+            # RULE 5: LAI NHAP VON pattern
+            elif "##LAI NHAP VON#" in transaction.description.upper():
+                # Use bank code from current bank info if available
+                bank_code = (
+                    self.current_bank_name or "ACB"
+                )  # Default to ACB if not available
+                description = f"Lãi nhập vốn NH {bank_code}"
+                self.logger.info(
+                    f"Applied LAI NHAP VON formatting: {description}"
+                )
+
+            # RULE 6: TRICH THU TIEN VAY - LAI pattern
+            elif "TRICH THU TIEN VAY - LAI" in transaction.description.upper():
+                # Extract the account number
+                account_match = re.search(
+                    r"ACCT VAY (\d+)", transaction.description.upper()
+                )
+                if account_match:
+                    account_number = account_match.group(1)
+                    description = f"Trả lãi vay KU {account_number}"
+                    # Set account to 6354
+                    debit_account = "6354"
+                    credit_account = self.default_bank_account
+                    self.logger.info(
+                        f"Applied TRICH THU TIEN VAY formatting: {description}"
+                    )
+                else:
+                    description = transaction.description
+                    self.logger.warning(
+                        f"TRICH THU TIEN VAY pattern detected but couldn't extract account number: {description}"
+                    )
+
+            # RULE 1 & 7: GIAI NGAN TKV SO pattern
+            elif "GIAI NGAN TKV SO" in transaction.description.upper():
+                # Extract the account number
+                account_match = re.search(
+                    r"GIAI NGAN TKV SO (\d+)", transaction.description.upper()
+                )
+                if account_match:
+                    account_number = account_match.group(1)
+                    description = f"Nhận giải ngân HĐGN {account_number}"
+                    # Set account to 34111
+                    debit_account = self.default_bank_account
+                    credit_account = "34111"
+                    self.logger.info(
+                        f"Applied GIAI NGAN TKV formatting: {description}"
+                    )
+                else:
+                    description = transaction.description
+                    self.logger.warning(
+                        f"GIAI NGAN TKV pattern detected but couldn't extract account number: {description}"
+                    )
+
             else:
                 # For all other cases, use the raw/original description
                 description = transaction.description
                 self.logger.info(f"Using original description: {description}")
+
+            # Reset the current_transaction_is_interest_payment flag after description formatting
+            # Make sure this happens only if we haven't already reset it in a special case handler
+            if self._current_transaction_is_interest_payment:
+                self._current_transaction_is_interest_payment = False
+                self.logger.info("Reset interest payment flag after processing")
 
             # Extract transaction sequence number
             if pos_code and "_" in transaction.description:
