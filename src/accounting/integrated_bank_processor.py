@@ -757,13 +757,21 @@ class IntegratedBankProcessor:
 
         for pattern, code_type in self.numeric_patterns:
             for match in re.finditer(pattern, description, re.IGNORECASE):
-                code = match.group(1)
-                position = match.start()
+                # Check if the match has capturing groups before trying to access them
+                if match.lastindex is not None:
+                    code = match.group(1)
+                    position = match.start()
 
-                # Skip if we've seen this code
-                if code not in seen:
-                    seen.add(code)
-                    codes.append((code, code_type, position))
+                    # Skip if we've seen this code
+                    if code not in seen:
+                        seen.add(code)
+                        codes.append((code, code_type, position))
+                else:
+                    # Log warning for patterns without capturing groups
+                    self.logger.warning(
+                        f"Pattern '{pattern}' matched but has no capturing groups. "
+                        f"Match: '{match.group(0)}'"
+                    )
 
         # Sort by position in description
         codes.sort(key=lambda x: x[2])
@@ -1997,11 +2005,270 @@ class IntegratedBankProcessor:
 
         return name, address
 
+    def process_visa_transaction(
+        self, description: str, transaction_data: dict
+    ) -> List[dict]:
+        """
+        Process VISA transactions with MerchNo and VAT information.
+
+        Args:
+            description (str): The transaction description text
+            transaction_data (dict): The original transaction data
+
+        Returns:
+            list: List of processed transaction records (main and fee)
+        """
+        self.logger.info(
+            f"Processing VISA transaction with description: {description}"
+        )
+        # 1. Extract MID from description
+        mid_match = re.search(r"MerchNo:\s*(\d+)", description)
+        if not mid_match:
+            self.logger.warning(
+                f"Failed to extract MID from VISA transaction: {description}"
+            )
+            return [transaction_data]  # Return original if pattern not found
+
+        mid = mid_match.group(1)
+
+        # 2. Extract VAT amount for fee record
+        vat_match = re.search(r"VAT Amt:([0-9,]+\.[0-9]+)/\d+\s*=", description)
+        if not vat_match:
+            self.logger.warning(
+                f"Failed to extract VAT amount from VISA transaction: {description}"
+            )
+            vat_amount = 0
+        else:
+            # Parse VAT amount (first value before the division)
+            vat_amount_str = vat_match.group(1)
+            vat_amount = float(vat_amount_str.replace(",", ""))
+
+        # 3. Search for MID in vcb_mids index
+        from src.accounting.fast_search import search_vcb_mids
+
+        mid_records = search_vcb_mids(mid, field_name="mid", limit=1)
+        if not mid_records:
+            self.logger.warning(f"MID not found in vcb_mids index: {mid}")
+            return [transaction_data]  # Return original if MID not found
+
+        mid_record = mid_records[0]
+
+        # 4. Extract code and tid
+        code = mid_record.get("code", "")
+        tid = mid_record.get("tid", "")
+
+        # 5. Process code (get part after "_")
+        if "-" in code:
+            processed_code = code.split("-")[1]
+        elif "_" in code:
+            processed_code = code.split("_")[1]
+        else:
+            processed_code = code
+            self.logger.warning(
+                f"Unexpected code format (missing delimiter): {code}"
+            )
+
+        # 6. Create main transaction record
+        main_record = transaction_data.copy()
+        main_record["description"] = f"Thu tiền bán hàng của khách lẻ POS {tid}"
+
+        # 7. Search counterparty using processed code
+        self.search_and_set_counterparty(main_record, processed_code)
+
+        # 8. Create fee record
+        fee_record = transaction_data.copy()
+        fee_record["description"] = (
+            f"Phí thu tiền bán hàng của khách lẻ POS {tid}"
+        )
+        fee_record["amount1"] = vat_amount
+        fee_record["amount2"] = vat_amount
+
+        # Also set the 'Tien' and 'Tien_Nt' fields as mentioned in the requirements
+        fee_record["Tien"] = vat_amount
+        fee_record["Tien_Nt"] = vat_amount
+
+        # Apply same counterparty to fee record
+        self.search_and_set_counterparty(fee_record, processed_code)
+
+        self.logger.info(
+            f"Processed VISA transaction with MID {mid}, TID {tid}, Code {code}"
+        )
+        self.logger.info(
+            f"Created main record: {main_record['description']} and fee record: {fee_record['description']}"
+        )
+
+        return [main_record, fee_record]
+
+    def search_and_set_counterparty(self, record: dict, code: str) -> None:
+        """
+        Search for counterparty using code and set counterparty info in the record
+
+        Args:
+            record: Transaction record to update
+            code: Counterparty code to search for
+        """
+        if not code:
+            return
+
+        # Use the counterparty extractor to find the counterparty
+        from src.accounting.fast_search import search_exact_counterparties
+
+        counterparty_results = search_exact_counterparties(
+            code, field_name="code", limit=1
+        )
+
+        if counterparty_results:
+            counterparty = counterparty_results[0]
+            record["counterparty_code"] = counterparty.get("code", "")
+            record["counterparty_name"] = counterparty.get("name", "")
+            record["address"] = counterparty.get("address", "")
+        else:
+            self.logger.warning(f"Counterparty not found for code: {code}")
+
     def process_transaction(
         self, transaction: RawTransaction
     ) -> Optional[SaokeEntry]:
         """Process a single transaction into a saoke entry"""
         try:
+            # Check if this is a VISA transaction
+            if (
+                "T/t T/ung the VISA:" in transaction.description
+                and "MerchNo:" in transaction.description
+            ):
+                self.logger.info(
+                    f"Detected VISA transaction: {transaction.reference}"
+                )
+                # Process using VISA transaction logic
+                transaction_data = {
+                    "reference": transaction.reference,
+                    "datetime": transaction.datetime,
+                    "debit_amount": transaction.debit_amount,
+                    "credit_amount": transaction.credit_amount,
+                    "balance": transaction.balance,
+                    "description": transaction.description,
+                    # Set amounts for SaokeEntry fields
+                    "amount1": transaction.credit_amount
+                    if transaction.credit_amount > 0
+                    else transaction.debit_amount,
+                    "amount2": transaction.credit_amount
+                    if transaction.credit_amount > 0
+                    else transaction.debit_amount,
+                }
+
+                # Process VISA transaction and get list of records (main and fee)
+                processed_records = self.process_visa_transaction(
+                    transaction.description, transaction_data
+                )
+
+                # Create SaokeEntry for the main record (first in list)
+                main_record = processed_records[0]
+
+                # Determine if transaction is credit or debit
+                is_credit = transaction.credit_amount > 0
+                document_type = "BC" if is_credit else "BN"
+
+                # Generate document number
+                doc_number = self.generate_document_number(
+                    document_type, transaction.datetime
+                )
+
+                # Format the date
+                formatted_date = self.format_date(transaction.datetime)
+
+                # Determine accounts
+                debit_account, credit_account = self.determine_accounts(
+                    description=main_record["description"],
+                    document_type=document_type,
+                    is_credit=is_credit,
+                    transaction_type="SALE",  # VISA transactions are sales
+                    counterparty_code=main_record.get("counterparty_code", ""),
+                )
+
+                # Create SaokeEntry for main record
+                main_entry = SaokeEntry(
+                    document_type=document_type,
+                    date=formatted_date,
+                    document_number=doc_number,
+                    currency="VND",
+                    exchange_rate=1.0,
+                    counterparty_code=main_record.get(
+                        "counterparty_code", "KL"
+                    ),
+                    counterparty_name=main_record.get(
+                        "counterparty_name", "Khách Lẻ Không Lấy Hóa Đơn"
+                    ),
+                    address=main_record.get("address", ""),
+                    description=main_record["description"],
+                    original_description=transaction.description,
+                    amount1=main_record["amount1"],
+                    amount2=main_record["amount2"],
+                    debit_account=debit_account,
+                    credit_account=credit_account,
+                    raw_transaction=transaction,
+                )
+
+                # If there's a fee record, add it to the transaction list for later processing
+                if len(processed_records) > 1:
+                    fee_record = processed_records[1]
+
+                    # Create a separate SaokeEntry for the fee record
+                    fee_doc_number = self.generate_document_number(
+                        document_type, transaction.datetime
+                    )
+
+                    # Determine accounts for fee record - usually same counterparty but different accounts
+                    fee_debit_account, fee_credit_account = (
+                        self.determine_accounts(
+                            description=fee_record["description"],
+                            document_type=document_type,
+                            is_credit=is_credit,
+                            transaction_type="FEE",  # Fee transaction
+                            counterparty_code=fee_record.get(
+                                "counterparty_code", ""
+                            ),
+                        )
+                    )
+
+                    # Create SaokeEntry for fee record
+                    fee_entry = SaokeEntry(
+                        document_type=document_type,
+                        date=formatted_date,
+                        document_number=fee_doc_number,
+                        currency="VND",
+                        exchange_rate=1.0,
+                        counterparty_code=fee_record.get(
+                            "counterparty_code", "KL"
+                        ),
+                        counterparty_name=fee_record.get(
+                            "counterparty_name", "Khách Lẻ Không Lấy Hóa Đơn"
+                        ),
+                        address=fee_record.get("address", ""),
+                        description=fee_record["description"],
+                        original_description=transaction.description,
+                        amount1=fee_record["Tien"],
+                        amount2=fee_record["Tien"],
+                        debit_account=fee_debit_account,
+                        credit_account=fee_credit_account,
+                        raw_transaction=transaction,  # Use same raw transaction for reference
+                    )
+
+                    # Store the fee entry for later processing
+                    # We need to access the processor's transaction list to add this entry
+                    # For now, we'll return only the main entry and handle fee transactions separately
+                    # in your batch processing logic
+                    self.logger.info(
+                        f"Created fee SaokeEntry: {fee_entry.description} with amount {fee_entry.amount1}"
+                    )
+
+                    # In a real implementation, you would add this fee entry to your list of entries
+                    # that will be processed into the final output
+                    # This depends on how your batch processing works
+
+                    # For demonstration, we're just returning the main entry
+                    # You'll need to modify your batch processing to include both entries
+
+                return main_entry
+
             # Special case for BIDV 3840 accounts - ensure we're using the correct account
             if (
                 "3840" in transaction.description
@@ -2732,10 +2999,110 @@ class IntegratedBankProcessor:
 
             # Process each transaction
             saoke_entries = []
+            # Removed visa_fee_entries - fees are now added immediately after main entries
+
             for transaction in raw_transactions:
+                # Check if this is a VISA transaction first
+                is_visa = (
+                    "T/t T/ung the VISA:" in transaction.description
+                    and "MerchNo:" in transaction.description
+                )
+
+                # Process the main transaction
                 entry = self.process_transaction(transaction)
+
                 if entry:
                     saoke_entries.append(entry.as_dict())
+
+                    # For VISA transactions, immediately create and add the fee entry
+                    if is_visa:
+                        # Create transaction data dictionary
+                        transaction_data = {
+                            "reference": transaction.reference,
+                            "datetime": transaction.datetime,
+                            "debit_amount": transaction.debit_amount,
+                            "credit_amount": transaction.credit_amount,
+                            "balance": transaction.balance,
+                            "description": transaction.description,
+                            "amount1": transaction.credit_amount
+                            if transaction.credit_amount > 0
+                            else transaction.debit_amount,
+                            "amount2": transaction.credit_amount
+                            if transaction.credit_amount > 0
+                            else transaction.debit_amount,
+                        }
+
+                        # Get processed records from VISA transaction
+                        processed_records = self.process_visa_transaction(
+                            transaction.description, transaction_data
+                        )
+
+                        # If we have a fee record (second item), create a SaokeEntry for it
+                        if len(processed_records) > 1:
+                            fee_record = processed_records[1]
+
+                            # Determine if transaction is credit or debit
+                            is_credit = transaction.credit_amount > 0
+                            document_type = "BC" if is_credit else "BN"
+
+                            # Generate document number
+                            fee_doc_number = self.generate_document_number(
+                                document_type, transaction.datetime
+                            )
+
+                            # Format the date
+                            formatted_date = self.format_date(
+                                transaction.datetime
+                            )
+
+                            # Determine accounts for fee record
+                            fee_debit_account, fee_credit_account = (
+                                self.determine_accounts(
+                                    description=fee_record["description"],
+                                    document_type=document_type,
+                                    is_credit=is_credit,
+                                    transaction_type="FEE",  # Fee transaction
+                                    counterparty_code=fee_record.get(
+                                        "counterparty_code", ""
+                                    ),
+                                )
+                            )
+
+                            # Create fee entry dictionary
+                            fee_entry_dict = {
+                                "document_type": document_type,
+                                "date": formatted_date,
+                                "document_number": fee_doc_number,
+                                "currency": "VND",
+                                "exchange_rate": 1.0,
+                                "counterparty_code": fee_record.get(
+                                    "counterparty_code", "KL"
+                                ),
+                                "counterparty_name": fee_record.get(
+                                    "counterparty_name",
+                                    "Khách Lẻ Không Lấy Hóa Đơn",
+                                ),
+                                "address": fee_record.get("address", ""),
+                                "description": fee_record["description"],
+                                "original_description": transaction.description,
+                                "amount1": fee_record["Tien"],
+                                "amount2": fee_record["Tien"],
+                                "debit_account": fee_debit_account,
+                                "credit_account": fee_credit_account,
+                                "cost_code": None,
+                                "department": None,
+                                "sequence": 1,
+                                "date2": self.format_date(
+                                    transaction.datetime, "alt"
+                                ),
+                                "transaction_type": "FEE",
+                            }
+
+                            # Add fee entry immediately after main entry
+                            saoke_entries.append(fee_entry_dict)
+                            self.logger.info(
+                                f"Added VISA fee entry immediately after main entry: {fee_record['description']} with amount {fee_record['Tien']}"
+                            )
 
             # Create output DataFrame
             output_df = pd.DataFrame(saoke_entries)
@@ -2839,6 +3206,16 @@ def test_integrated_processor():
             description="ONL KDV PO SON19448 SON19538   Ma g iao dich  Trace372024 Trace 372024",
         )
 
+        # Test with VISA transaction example
+        example_visa = RawTransaction(
+            reference="0771VISA-123456",
+            datetime=datetime(2025, 6, 15, 14, 30, 0),
+            debit_amount=0,
+            credit_amount=399000,
+            balance=67000000,
+            description="T/t T/ung the VISA:CT TNHH SANG TAM; MerchNo: 3700109907 Gross Amt: Not On-Us=399,000.00 VND; VAT Amt:13,079.00/11 = 1,189.00 VND(VAT code:0306131754); Code:1005; SLGD: Not On-Us=1; Ngay 15/06/2025.",
+        )
+
         example2 = RawTransaction(
             reference="0771NE9A-8YKBRMYAC",
             datetime=datetime(2025, 3, 2, 10, 15, 30),
@@ -2901,6 +3278,46 @@ def test_integrated_processor():
             print(f"Amount: {entry2.amount1:,.0f}")
             print(f"Debit Account: {entry2.debit_account}")
             print(f"Credit Account: {entry2.credit_account}")
+
+        print("\nProcessing VISA transaction:")
+        entry_visa = processor.process_transaction(example_visa)
+        if entry_visa:
+            print(f"Original: {example_visa.description}")
+            print(f"Formatted: {entry_visa.description}")
+            print(f"Document Type: {entry_visa.document_type}")
+            print(f"Amount: {entry_visa.amount1:,.0f}")
+            print(f"Debit Account: {entry_visa.debit_account}")
+            print(f"Credit Account: {entry_visa.credit_account}")
+            print(f"Transaction Type: {entry_visa.transaction_type}")
+
+            # Check that both main and fee entries are created in batch processing
+            print("\nTesting batch processing for VISA transactions...")
+            df = processor.process_to_saoke(
+                pd.DataFrame(
+                    [
+                        {
+                            "reference": example_visa.reference,
+                            "date": example_visa.datetime,
+                            "debit": example_visa.debit_amount,
+                            "credit": example_visa.credit_amount,
+                            "balance": example_visa.balance,
+                            "description": example_visa.description,
+                        }
+                    ]
+                )
+            )
+
+            print(f"Total entries generated: {len(df)}")
+            if len(df) > 1:
+                # First entry is main transaction
+                print(f"Main entry: {df.iloc[0]['description']}")
+                print(f"Main amount: {df.iloc[0]['amount1']:,.0f}")
+
+                # Second entry is fee transaction
+                print(f"Fee entry: {df.iloc[1]['description']}")
+                print(f"Fee amount: {df.iloc[1]['amount1']:,.0f}")
+            else:
+                print("Warning: Fee entry not generated in batch processing")
 
         processor.close()
     else:

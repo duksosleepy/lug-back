@@ -882,6 +882,241 @@ def index_pos_machines(file_path="danhmucmaypos.xlsx", sheet_name=None):
         return False
 
 
+def index_vcb_mids(file_path="danhmucmidvcb.xlsx", sheet_name=None):
+    """Import VCB MID data from Excel file into a Tantivy index"""
+    logger.info(f"Importing VCB MIDs from: {file_path}")
+
+    try:
+        # Create index directory if it doesn't exist
+        index_path = Path("index/vcb_mids")
+        os.makedirs(index_path, exist_ok=True)
+        logger.info(f"Using index directory: {index_path}")
+
+        # Get available sheets
+        try:
+            xl_file = pd.ExcelFile(file_path)
+            sheet_names = xl_file.sheet_names
+            logger.info(f"Available sheets in {file_path}: {sheet_names}")
+
+            # Process specific sheet if provided, otherwise process all sheets
+            if sheet_name is not None:
+                sheets_to_process = [sheet_name]
+                logger.info(f"Processing specified sheet: {sheet_name}")
+            else:
+                sheets_to_process = sheet_names
+                logger.info(f"Processing all {len(sheet_names)} sheets")
+        except Exception as e:
+            logger.error(f"Error reading sheet names from {file_path}: {e}")
+            return False
+
+        # Create schema based on VCB MIDs table structure
+        schema_builder = SchemaBuilder()
+        tid_field = schema_builder.add_text_field("tid", stored=True)  # SỐ TID
+        mid_field = schema_builder.add_text_field("mid", stored=True)  # MID
+        code_field = schema_builder.add_text_field(
+            "code", stored=True
+        )  # Mã đối tượng
+        name_field = schema_builder.add_text_field(
+            "name", stored=True, tokenizer_name="vietnamese_normalized"
+        )  # Tên
+        address_field = schema_builder.add_text_field(
+            "address", stored=True, tokenizer_name="vietnamese_normalized"
+        )  # Địa chỉ
+        account_holder_field = schema_builder.add_text_field(
+            "account_holder",
+            stored=True,
+            tokenizer_name="vietnamese_normalized",
+        )  # CHỦ TÀI KHOẢN
+        account_number_field = schema_builder.add_text_field(
+            "account_number", stored=True
+        )  # TK THỤ HƯỞNG
+        bank_name_field = schema_builder.add_text_field(
+            "bank_name", stored=True, tokenizer_name="vietnamese_normalized"
+        )  # NGÂN HÀNG
+
+        # Build the schema
+        schema = schema_builder.build()
+
+        # Create an index with the schema
+        index = Index(schema, path=str(index_path))
+
+        # Create custom analyzer with ASCII folding for Vietnamese text
+        vietnamese_analyzer = (
+            TextAnalyzerBuilder(Tokenizer.simple())
+            .filter(Filter.ascii_fold())
+            .filter(Filter.lowercase())
+            .build()
+        )
+
+        # Register the analyzer
+        index.register_tokenizer("vietnamese_normalized", vietnamese_analyzer)
+
+        # Create a writer for the index
+        writer = index.writer()
+
+        # Track total documents across all sheets
+        total_doc_count = 0
+        processed_sheets = 0
+        failed_sheets = 0
+
+        # Process each sheet
+        for current_sheet in sheets_to_process:
+            try:
+                logger.info(f"Processing sheet: {current_sheet}")
+
+                # Read Excel file for current sheet
+                df = pd.read_excel(file_path, sheet_name=current_sheet)
+
+                # Log DataFrame info for debugging
+                logger.info(
+                    f"Sheet '{current_sheet}' - DataFrame shape: {df.shape}"
+                )
+                logger.info(
+                    f"Sheet '{current_sheet}' - DataFrame columns: {list(df.columns)}"
+                )
+
+                # Fill NA values
+                df.fillna(
+                    {
+                        col: "" if df[col].dtype == "object" else 0
+                        for col in df.columns
+                    },
+                    inplace=True,
+                )
+
+                # Document count for this sheet
+                sheet_doc_count = 0
+
+                # Map column names to standardized names based on the content
+                column_map = {}
+                for col in df.columns:
+                    col_str = str(col).strip().lower()
+                    if any(x in col_str for x in ["tid", "số tid"]):
+                        column_map[col] = "tid"
+                    elif "mid" in col_str:
+                        column_map[col] = "mid"
+                    elif any(
+                        x in col_str
+                        for x in [
+                            "mã đối tượng",
+                            "ma dt",
+                            "ma_dt",
+                            "department",
+                        ]
+                    ):
+                        column_map[col] = "code"
+                    elif any(x in col_str for x in ["tên", "ten"]):
+                        column_map[col] = "name"
+                    elif any(
+                        x in col_str
+                        for x in ["địa chỉ", "dia chi", "dia_chi", "address"]
+                    ):
+                        column_map[col] = "address"
+                    elif any(
+                        x in col_str
+                        for x in [
+                            "chủ tài khoản",
+                            "chu tk",
+                            "chu_tk",
+                            "account_holder",
+                        ]
+                    ):
+                        column_map[col] = "account_holder"
+                    elif any(
+                        x in col_str
+                        for x in [
+                            "tk thụ hưởng",
+                            "tk_th",
+                            "account",
+                            "so_tk",
+                            "số tk",
+                        ]
+                    ):
+                        column_map[col] = "account_number"
+                    elif any(
+                        x in col_str
+                        for x in ["ngân hàng", "ngan hang", "bank", "nh"]
+                    ):
+                        column_map[col] = "bank_name"
+
+                logger.info(f"Column mapping: {column_map}")
+
+                # Process each row in the DataFrame
+                for _, row in df.iterrows():
+                    # Get values using column mapping
+                    tid = ""
+                    mid = ""
+                    code = ""
+                    name = ""
+                    address = ""
+                    account_holder = ""
+                    account_number = ""
+                    bank_name = ""
+
+                    # Extract values using mapped columns
+                    for col, mapped_name in column_map.items():
+                        if mapped_name == "tid":
+                            tid = str(row.get(col, ""))
+                        elif mapped_name == "mid":
+                            mid = str(row.get(col, ""))
+                        elif mapped_name == "code":
+                            code = str(row.get(col, ""))
+                        elif mapped_name == "name":
+                            name = str(row.get(col, ""))
+                        elif mapped_name == "address":
+                            address = str(row.get(col, ""))
+                        elif mapped_name == "account_holder":
+                            account_holder = str(row.get(col, ""))
+                        elif mapped_name == "account_number":
+                            account_number = str(row.get(col, ""))
+                        elif mapped_name == "bank_name":
+                            bank_name = str(row.get(col, ""))
+
+                    # Skip if no mid or tid (likely header row)
+                    if not mid and not tid:
+                        continue
+
+                    # Create document dict
+                    doc_dict = {
+                        "tid": tid,
+                        "mid": mid,
+                        "code": code,
+                        "name": name,
+                        "address": address,
+                        "account_holder": account_holder,
+                        "account_number": str(account_number),
+                        "bank_name": bank_name,
+                    }
+
+                    # Add document to the index
+                    writer.add_document(Document.from_dict(doc_dict))
+                    sheet_doc_count += 1
+                    total_doc_count += 1
+
+                logger.info(
+                    f"Added {sheet_doc_count} VCB MIDs from sheet '{current_sheet}'"
+                )
+                processed_sheets += 1
+
+            except Exception as e:
+                logger.error(f"Error processing sheet '{current_sheet}': {e}")
+                failed_sheets += 1
+                continue
+
+        # Commit changes to the index
+        writer.commit()
+        writer.wait_merging_threads()
+
+        logger.info(
+            f"Completed processing: {total_doc_count} total VCB MIDs from {processed_sheets} sheets ({failed_sheets} failed)"
+        )
+        return processed_sheets > 0
+
+    except Exception as e:
+        logger.error(f"Error importing VCB MIDs: {e}")
+        return False
+
+
 # Import documents from Excel files
 if __name__ == "__main__":
     # Import counterparties
@@ -898,3 +1133,6 @@ if __name__ == "__main__":
 
     # Import POS machines
     index_pos_machines(file_path="danhmucmaypos.xlsx")
+
+    # Import VCB MIDs
+    index_vcb_mids(file_path="danhmucmidvcb.xlsx")

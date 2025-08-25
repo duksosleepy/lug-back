@@ -22,6 +22,8 @@ from src.accounting.bank_statement_reader import BankStatementReader
 from src.accounting.integrated_bank_processor import IntegratedBankProcessor
 from src.util import validate_excel_file
 
+# Removed pending_fee_entries - now handled by process_to_saoke method
+
 # Create router for accounting endpoints
 router = APIRouter(prefix="/accounting", tags=["accounting"])
 
@@ -30,56 +32,7 @@ reader = BankStatementReader()
 processor = IntegratedBankProcessor()
 
 
-def create_basic_saoke_entry(transaction, bank_config=None):
-    """Create a basic SaokeEntry when process_transaction method is not available"""
-    try:
-        from src.accounting.integrated_bank_processor import SaokeEntry
-
-        # Determine if this is a credit or debit transaction
-        is_credit = transaction.credit_amount > 0
-        amount = (
-            transaction.credit_amount if is_credit else transaction.debit_amount
-        )
-
-        # Basic document type
-        document_type = "BC" if is_credit else "BN"
-
-        # Format date
-        date_str = transaction.datetime.strftime("%d/%m/%Y")
-
-        # Generate simple document number
-        doc_number = f"{document_type}01/{transaction.reference[-3:] if transaction.reference else '001'}"
-
-        # Create basic entry
-        entry = SaokeEntry(
-            document_type=document_type,
-            date=date_str,
-            document_number=doc_number,
-            currency="VND",
-            exchange_rate=1.0,
-            counterparty_code="KL-001",  # Default counterparty
-            counterparty_name="Khách hàng",
-            address="",
-            description=transaction.description[:100],  # Truncate if too long
-            original_description=transaction.description,
-            amount1=amount,
-            amount2=amount,
-            debit_account="1121114"
-            if is_credit
-            else "131",  # Bank account for credit, default for debit
-            credit_account="131"
-            if is_credit
-            else "1121114",  # Default for credit, bank account for debit
-        )
-
-        logger.info(
-            f"Created basic saoke entry: amount={amount}, type={document_type}, ref={transaction.reference}"
-        )
-        return entry
-
-    except Exception as e:
-        logger.error(f"Error creating basic saoke entry: {e}")
-        return None
+# Removed create_basic_saoke_entry function - no longer needed with process_to_saoke method
 
 
 class AccountingResponse(BaseModel):
@@ -1055,72 +1008,31 @@ async def process_bank_statement(file: UploadFile):
                         )
                         continue
 
-                # Process each transaction using the processor's account determination logic
-                processed_count = 0
-                failed_count = 0
-
-                for i, transaction in enumerate(raw_transactions):
-                    try:
-                        # Debug logging for MBB transactions
-                        if bank_config and bank_config.code == "MBB":
-                            logger.info(
-                                f"MBB: Processing transaction {i + 1}: ref={transaction.reference}, debit={transaction.debit_amount}, credit={transaction.credit_amount}"
-                            )
-
-                        # Check if processor has process_transaction method
-                        if hasattr(processor, "process_transaction"):
-                            entry = processor.process_transaction(transaction)
-                        else:
-                            # Create a basic SaokeEntry if process_transaction doesn't exist
-                            logger.warning(
-                                "process_transaction method not found, creating basic entry"
-                            )
-                            entry = create_basic_saoke_entry(
-                                transaction, bank_config
-                            )
-
-                        if entry:
-                            entry_dict = (
-                                entry.as_dict()
-                                if hasattr(entry, "as_dict")
-                                else entry.__dict__
-                            )
-                            saoke_entries.append(entry_dict)
-                            processed_count += 1
-
-                            # Debug logging for MBB
-                            if bank_config and bank_config.code == "MBB":
-                                amount = (
-                                    entry_dict.get("amount1", 0)
-                                    if isinstance(entry_dict, dict)
-                                    else getattr(entry, "amount1", 0)
-                                )
-                                logger.info(
-                                    f"MBB: Successfully processed transaction {i + 1}, amount1={amount}"
-                                )
-                        else:
-                            failed_count += 1
-                            logger.warning(
-                                f"Failed to process transaction {i + 1}: {transaction.reference}"
-                            )
-                    except Exception as e:
-                        failed_count += 1
-                        logger.error(
-                            f"Error processing transaction {i + 1} ({transaction.reference}): {e}"
-                        )
-                        continue
-
+                # Use the existing process_to_saoke method which already handles VISA fee entries correctly
                 logger.info(
-                    f"Transaction processing complete: {processed_count} successful, {failed_count} failed"
+                    "Using process_to_saoke method for comprehensive transaction processing"
                 )
 
-                # Create a DataFrame from the saoke entries
-                if not saoke_entries:
+                # Call process_to_saoke with the transactions DataFrame
+                processed_df = processor.process_to_saoke(transactions_df)
+
+                if processed_df.empty:
                     logger.error("No transactions were successfully processed")
                     return AccountingResponse(
                         success=False,
-                        message=f"No transactions were successfully processed. {failed_count} transactions failed.",
+                        message="No transactions were successfully processed.",
                     )
+
+                # Convert processed DataFrame to saoke entries list
+                saoke_entries = processed_df.to_dict("records")
+                processed_count = len(saoke_entries)
+                failed_count = (
+                    0  # process_to_saoke handles its own error counting
+                )
+
+                logger.info(
+                    f"Transaction processing complete: {processed_count} entries created (including VISA fee entries)"
+                )
 
                 # Process dates from the original saoke_entries to ensure DD/MM/YYYY format
                 # Do this before creating the formatted DataFrame
@@ -1181,8 +1093,8 @@ async def process_bank_statement(file: UploadFile):
                     except Exception as e:
                         logger.warning(f"Error formatting dates in entry: {e}")
 
-                # Create a DataFrame from the updated saoke entries
-                processed_df = pd.DataFrame(saoke_entries)
+                # The processed_df already contains the complete data from process_to_saoke
+                # saoke_entries is now the list of dictionaries from the DataFrame
 
                 logger.info(
                     f"Processed {len(processed_df)} transactions with IntegratedBankProcessor ({failed_count} failed)"

@@ -718,6 +718,171 @@ def search_pos_by_department(department_code, limit=50):
     )
 
 
+def search_vcb_mids(query_text, field_name="mid", limit=10):
+    """Search VCB MIDs by mid, tid, name, or other fields"""
+    logger.info(
+        f"Searching VCB MIDs for '{query_text}' in field '{field_name}' with limit {limit}"
+    )
+
+    try:
+        # Load the vcb_mids index using absolute path
+        vcb_mids_index = INDEX_DIR / "vcb_mids"
+        logger.info(f"Opening VCB MIDs index at {vcb_mids_index}")
+        index = Index.open(str(vcb_mids_index))
+
+        # Create custom analyzer with ASCII folding for Vietnamese text
+        vietnamese_analyzer = (
+            TextAnalyzerBuilder(Tokenizer.simple())
+            .filter(Filter.ascii_fold())
+            .filter(Filter.lowercase())
+            .build()
+        )
+
+        # Register the analyzer
+        index.register_tokenizer("vietnamese_normalized", vietnamese_analyzer)
+
+        # Get searcher
+        searcher = index.searcher()
+
+        # Process the query text
+        processed_terms = vietnamese_analyzer.analyze(query_text)
+        logger.debug(f"Processed terms: {processed_terms}")
+
+        # Determine search strategy based on field type and query
+        if field_name in ["mid", "tid", "account_number"]:
+            # For numeric/code fields, use regex for partial matching
+            regex_pattern = f".*{query_text}.*"
+            query = Query.regex_query(index.schema, field_name, regex_pattern)
+            logger.debug(
+                f"Using regex query for field '{field_name}': {query_text}"
+            )
+        elif len(processed_terms) > 1:
+            # Multi-term query for text fields - use phrase search
+            query = Query.phrase_query(
+                index.schema, field_name, processed_terms
+            )
+            logger.debug(f"Using phrase query for: {processed_terms}")
+        elif len(processed_terms) == 1:
+            # Single term for text fields - use regex for partial matching
+            processed_term = processed_terms[0]
+            regex_pattern = f".*{processed_term}.*"
+            query = Query.regex_query(index.schema, field_name, regex_pattern)
+            logger.debug(f"Using regex query for: {processed_term}")
+        else:
+            # Fallback to original query if no processed terms
+            regex_pattern = f".*{query_text}.*"
+            query = Query.regex_query(index.schema, field_name, regex_pattern)
+            logger.debug(f"Using fallback regex query for: {query_text}")
+
+        # Execute search
+        search_result = searcher.search(query, limit)
+        logger.debug(f"Search returned {len(search_result.hits)} hits")
+
+        # Format results
+        results = []
+        for score, doc_address in search_result.hits:
+            doc = searcher.doc(doc_address)
+            results.append(
+                {
+                    "score": score,
+                    "tid": doc.get_first("tid") or "",
+                    "mid": doc.get_first("mid") or "",
+                    "code": doc.get_first("code") or "",
+                    "department_code": doc.get_first("department_code") or "",
+                    "name": doc.get_first("name") or "",
+                    "address": doc.get_first("address") or "",
+                    "account_holder": doc.get_first("account_holder") or "",
+                    "account_number": doc.get_first("account_number") or "",
+                    "bank_name": doc.get_first("bank_name") or "",
+                }
+            )
+
+        logger.debug(f"Returning {len(results)} formatted VCB MID results")
+        return results
+
+    except Exception as e:
+        logger.error(f"Error searching VCB MIDs: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return []
+
+
+def search_vcb_tids(query_text, field_name="tid", limit=10):
+    """Legacy function to maintain compatibility - delegates to search_vcb_mids"""
+    logger.warning(f"search_vcb_tids is deprecated, use search_vcb_mids instead")
+    return search_vcb_mids(query_text, field_name, limit)
+
+
+def search_exact_vcb_mids(query_text, field_name="mid", limit=10):
+    """Search VCB MIDs by mid, tid, name, or other fields using exact search"""
+    logger.info(
+        f"Exact searching VCB MIDs for '{query_text}' in field '{field_name}'"
+    )
+
+    try:
+        # Load the vcb_mids index using absolute path
+        vcb_mids_index = INDEX_DIR / "vcb_mids"
+        logger.info(f"Opening VCB MIDs index at {vcb_mids_index}")
+        index = Index.open(str(vcb_mids_index))
+
+        # Create custom analyzer with ASCII folding for Vietnamese text
+        vietnamese_analyzer = (
+            TextAnalyzerBuilder(Tokenizer.raw())
+            .filter(Filter.ascii_fold())
+            .filter(Filter.lowercase())
+            .build()
+        )
+
+        # Register the analyzer
+        index.register_tokenizer("vietnamese_normalized", vietnamese_analyzer)
+
+        # Get searcher
+        searcher = index.searcher()
+
+        # Process the search terms with Vietnamese analyzer
+        processed_terms = vietnamese_analyzer.analyze(query_text)
+        processed_query = (
+            " ".join(processed_terms) if processed_terms else query_text
+        )
+
+        # Create query
+        query = index.parse_query(processed_query, [field_name])
+
+        # Execute search
+        search_result = searcher.search(query, limit)
+
+        # Format results
+        results = []
+        for score, doc_address in search_result.hits:
+            doc = searcher.doc(doc_address)
+            results.append(
+                {
+                    "score": score,
+                    "tid": doc.get_first("tid") or "",
+                    "mid": doc.get_first("mid") or "",
+                    "code": doc.get_first("code") or "",
+                    "department_code": doc.get_first("department_code") or "",
+                    "name": doc.get_first("name") or "",
+                    "address": doc.get_first("address") or "",
+                    "account_holder": doc.get_first("account_holder") or "",
+                    "account_number": doc.get_first("account_number") or "",
+                    "bank_name": doc.get_first("bank_name") or "",
+                }
+            )
+
+        return results
+
+    except Exception as e:
+        logger.error(f"Error exact searching VCB MIDs: {e}")
+        return []
+
+def search_exact_vcb_tids(query_text, field_name="tid", limit=10):
+    """Legacy function to maintain compatibility - delegates to search_exact_vcb_mids"""
+    logger.warning(f"search_exact_vcb_tids is deprecated, use search_exact_vcb_mids instead")
+    return search_exact_vcb_mids(query_text, field_name, limit)
+
+
 # Example usage
 if __name__ == "__main__":
     # Search for counterparties
@@ -795,4 +960,13 @@ if __name__ == "__main__":
     for result in results:
         print(
             f"Code: {result['code']} | Name: {result['name']} | Department: {result['department_code']} | Score: {result['score']:.4f}"
+        )
+
+    # Search for VCB MIDs
+    print("\n=== VCB MID Search Examples ===")
+    results = search_vcb_tids("3700104940")
+    print("\nVCB MIDs with '3700104940' in MID:")
+    for result in results:
+        print(
+            f"MID: {result['mid']} | TID: {result['tid']} | Name: {result['name']} | Score: {result['score']:.4f}"
         )
