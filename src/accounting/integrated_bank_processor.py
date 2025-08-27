@@ -3455,13 +3455,12 @@ class IntegratedBankProcessor:
                 if self.current_bank_name == "VCB":
                     # Import VCB processor functions
                     from src.accounting.vcb_processor import (
+                        process_vcb_fee_transaction,
+                        process_vcb_interest_transaction,
                         process_vcb_pos_transaction,
                         process_vcb_transfer_transaction,
-                        process_vcb_interest_transaction,
-                        process_vcb_fee_transaction,
-                        process_generic_vcb_transaction
                     )
-                    
+
                     # Prepare transaction data dictionary
                     transaction_data = {
                         "reference": transaction.reference,
@@ -3470,64 +3469,100 @@ class IntegratedBankProcessor:
                         "credit_amount": transaction.credit_amount,
                         "balance": transaction.balance,
                         "description": transaction.description,
-                        "amount1": transaction.credit_amount if transaction.credit_amount > 0 else transaction.debit_amount,
-                        "amount2": transaction.credit_amount if transaction.credit_amount > 0 else transaction.debit_amount,
+                        "amount1": transaction.credit_amount
+                        if transaction.credit_amount > 0
+                        else transaction.debit_amount,
+                        "amount2": transaction.credit_amount
+                        if transaction.credit_amount > 0
+                        else transaction.debit_amount,
                     }
-                    
+
                     # Determine which VCB processor to use based on transaction description
                     processed_records = None
-                    
+
                     # Process VCB transactions based on patterns in description
                     if "INTEREST PAYMENT" in transaction.description:
                         # Interest payment transaction
-                        processed_records = process_vcb_interest_transaction(transaction.description, transaction_data)
-                        self.logger.info(f"Processed VCB interest payment transaction: {transaction.description[:40]}...")
-                    
+                        processed_records = process_vcb_interest_transaction(
+                            transaction.description, transaction_data
+                        )
+                        self.logger.info(
+                            f"Processed VCB interest payment transaction: {transaction.description[:40]}..."
+                        )
+
                     elif "THU PHI QLTK TO CHUC-VND" in transaction.description:
                         # Account management fee transaction
-                        processed_records = process_vcb_fee_transaction(transaction.description, transaction_data)
-                        self.logger.info(f"Processed VCB account management fee transaction: {transaction.description[:40]}...")
-                    
+                        processed_records = process_vcb_fee_transaction(
+                            transaction.description, transaction_data
+                        )
+                        self.logger.info(
+                            f"Processed VCB account management fee transaction: {transaction.description[:40]}..."
+                        )
+
                     elif "IBVCB" in transaction.description:
                         # Transfer transaction
-                        processed_records = process_vcb_transfer_transaction(transaction.description, transaction_data)
-                        self.logger.info(f"Processed VCB transfer transaction: {transaction.description[:40]}...")
-                    
-                    elif ("T/t T/ung the VISA:" in transaction.description or 
-                          "T/t T/ung the MASTER:" in transaction.description) and "MerchNo:" in transaction.description:
+                        processed_records = process_vcb_transfer_transaction(
+                            transaction.description, transaction_data
+                        )
+                        self.logger.info(
+                            f"Processed VCB transfer transaction: {transaction.description[:40]}..."
+                        )
+
+                    elif (
+                        "T/t T/ung the VISA:" in transaction.description
+                        or "T/t T/ung the MASTER:" in transaction.description
+                    ) and "MerchNo:" in transaction.description:
                         # Card transaction (VISA or MASTER)
-                        processed_records = process_vcb_pos_transaction(transaction.description, transaction_data)
-                        self.logger.info(f"Processed VCB POS card transaction: {transaction.description[:40]}...")
-                    
+                        processed_records = process_vcb_pos_transaction(
+                            transaction.description, transaction_data
+                        )
+                        self.logger.info(
+                            f"Processed VCB POS card transaction: {transaction.description[:40]}..."
+                        )
+
                     # If we processed this transaction with a VCB-specific processor
                     if processed_records:
                         # Determine if transaction is credit or debit
                         is_credit = transaction.credit_amount > 0
                         document_type = "BC" if is_credit else "BN"
-                        
+
                         # Add all processed records to saoke_entries
                         for idx, record in enumerate(processed_records):
                             # Generate document number
-                            doc_number = self.generate_document_number(document_type, transaction.datetime)
-                            
+                            doc_number = self.generate_document_number(
+                                document_type, transaction.datetime
+                            )
+
                             # Format date
-                            formatted_date = self.format_date(transaction.datetime)
-                            
+                            formatted_date = self.format_date(
+                                transaction.datetime
+                            )
+
                             # Set accounts if not already set
-                            if not record.get("debit_account") and not record.get("credit_account"):
+                            if not record.get(
+                                "debit_account"
+                            ) and not record.get("credit_account"):
                                 # Determine accounts based on record type (main or fee)
-                                debit_account, credit_account = self.determine_accounts(
-                                    description=record["description"],
-                                    document_type=document_type,
-                                    is_credit=is_credit,
-                                    transaction_type="FEE" if idx > 0 else None,  # Fee for all records after first
-                                    counterparty_code=record.get("counterparty_code", "")
+                                debit_account, credit_account = (
+                                    self.determine_accounts(
+                                        description=record["description"],
+                                        document_type=document_type,
+                                        is_credit=is_credit,
+                                        transaction_type="FEE"
+                                        if idx > 0
+                                        else None,  # Fee for all records after first
+                                        counterparty_code=record.get(
+                                            "counterparty_code", ""
+                                        ),
+                                    )
                                 )
                             else:
                                 # Use accounts set by the processor
                                 debit_account = record.get("debit_account", "")
-                                credit_account = record.get("credit_account", "")
-                            
+                                credit_account = record.get(
+                                    "credit_account", ""
+                                )
+
                             # Create entry dictionary
                             entry_dict = {
                                 "document_type": document_type,
@@ -3535,41 +3570,164 @@ class IntegratedBankProcessor:
                                 "document_number": doc_number,
                                 "currency": "VND",
                                 "exchange_rate": 1.0,
-                                "counterparty_code": record.get("counterparty_code", "KL"),
-                                "counterparty_name": record.get("counterparty_name", "Khách Lẻ Không Lấy Hóa Đơn"),
+                                "counterparty_code": record.get(
+                                    "counterparty_code", "KL"
+                                ),
+                                "counterparty_name": record.get(
+                                    "counterparty_name",
+                                    "Khách Lẻ Không Lấy Hóa Đơn",
+                                ),
                                 "address": record.get("address", ""),
                                 "description": record["description"],
-                                "original_description": record.get("original_description", transaction.description),
-                                "amount1": record.get("amount1", transaction_data["amount1"]),
-                                "amount2": record.get("amount2", transaction_data["amount2"]),
+                                "original_description": record.get(
+                                    "original_description",
+                                    transaction.description,
+                                ),
+                                "amount1": record.get(
+                                    "amount1", transaction_data["amount1"]
+                                ),
+                                "amount2": record.get(
+                                    "amount2", transaction_data["amount2"]
+                                ),
                                 "debit_account": debit_account,
                                 "credit_account": credit_account,
                                 "cost_code": None,
                                 "department": None,
                                 "sequence": record.get("sequence", idx + 1),
-                                "date2": self.format_date(transaction.datetime, "alt"),
+                                "date2": self.format_date(
+                                    transaction.datetime, "alt"
+                                ),
                                 "transaction_type": "FEE" if idx > 0 else None,
                             }
-                            
+
                             # Add entry to saoke_entries
                             saoke_entries.append(entry_dict)
-                            self.logger.info(f"Added VCB processed record #{idx+1}: {record['description']}")
-                        
+                            self.logger.info(
+                                f"Added VCB processed record #{idx + 1}: {record['description']}"
+                            )
+
+                            # Check if we need to do additional counterparty lookup for POS transactions
+                            if (
+                                idx == 0
+                                and (
+                                    "T/t T/ung the VISA:"
+                                    in transaction.description
+                                    or "T/t T/ung the MASTER:"
+                                    in transaction.description
+                                )
+                                and "MerchNo:" in transaction.description
+                            ):
+                                # Extract MID from description
+                                mid_match = re.search(
+                                    r"MerchNo:\s*(\d+)", transaction.description
+                                )
+                                if mid_match:
+                                    mid = mid_match.group(1)
+                                    logger.info(
+                                        f"Extracted MID: {mid} from transaction description"
+                                    )
+
+                                    # Search for MID in vcb_mids index
+                                    from src.accounting.fast_search import (
+                                        search_vcb_mids,
+                                    )
+
+                                    mid_records = search_vcb_mids(
+                                        mid, field_name="mid", limit=1
+                                    )
+
+                                    if mid_records:
+                                        mid_record = mid_records[0]
+                                        # Extract code and tid
+                                        code = mid_record.get("code", "")
+                                        tid = mid_record.get("tid", "")
+
+                                        logger.info(
+                                            f"Found MID record: code={code}, tid={tid}"
+                                        )
+
+                                        # Process code (get part after "_" or "-")
+                                        processed_code = ""
+                                        if "-" in code:
+                                            processed_code = code.split("-")[1]
+                                        elif "_" in code:
+                                            processed_code = code.split("_")[1]
+                                        else:
+                                            processed_code = code
+                                            logger.warning(
+                                                f"Unexpected code format (missing delimiter): {code}"
+                                            )
+
+                                        logger.info(
+                                            f"Processed code: {processed_code}"
+                                        )
+
+                                        # Search for counterparty using processed code
+                                        from src.accounting.fast_search import (
+                                            search_counterparties,
+                                        )
+
+                                        counterparty_results = (
+                                            search_counterparties(
+                                                processed_code,
+                                                field_name="code",
+                                                limit=1,
+                                            )
+                                        )
+
+                                        if counterparty_results:
+                                            counterparty = counterparty_results[
+                                                0
+                                            ]
+                                            # Update both main and fee entries with counterparty info
+                                            for entry_idx, entry in enumerate(
+                                                saoke_entries
+                                            ):
+                                                if (
+                                                    entry.get(
+                                                        "original_description"
+                                                    )
+                                                    == transaction.description
+                                                ):
+                                                    saoke_entries[entry_idx][
+                                                        "counterparty_code"
+                                                    ] = counterparty.get(
+                                                        "code", ""
+                                                    )
+                                                    saoke_entries[entry_idx][
+                                                        "counterparty_name"
+                                                    ] = counterparty.get(
+                                                        "name", ""
+                                                    )
+                                                    saoke_entries[entry_idx][
+                                                        "address"
+                                                    ] = counterparty.get(
+                                                        "address", ""
+                                                    )
+
+                                            logger.info(
+                                                f"Updated entries with counterparty: {counterparty.get('code', '')} - {counterparty.get('name', '')}"
+                                            )
+                                    else:
+                                        logger.warning(
+                                            f"MID not found in vcb_mids index: {mid}"
+                                        )
+
                         # Skip standard processing since we've already handled this transaction
                         continue
-                
+
                 # If not processed by VCB-specific processors, process normally
                 entry = self.process_transaction(transaction)
-                
+
                 if entry:
                     saoke_entries.append(entry.as_dict())
-                    
+
                     # Check if this is a VISA transaction that needs fee processing
                     is_visa = (
                         "T/t T/ung the VISA:" in transaction.description
                         and "MerchNo:" in transaction.description
                     )
-                    
+
                     # For VISA transactions, immediately create and add the fee entry
                     # This is a fallback for when the VCB processors don't run
                     if is_visa and self.current_bank_name != "VCB":
@@ -3588,31 +3746,34 @@ class IntegratedBankProcessor:
                             if transaction.credit_amount > 0
                             else transaction.debit_amount,
                         }
-                        
+
                         # Import and use VISA transaction processor as fallback
-                        from src.accounting.vcb_processor import process_vcb_pos_transaction
+                        from src.accounting.vcb_processor import (
+                            process_vcb_pos_transaction,
+                        )
+
                         processed_records = process_vcb_pos_transaction(
                             transaction.description, transaction_data
                         )
-                        
+
                         # If we have a fee record (second item), create a SaokeEntry for it
                         if len(processed_records) > 1:
                             fee_record = processed_records[1]
-                            
+
                             # Determine if transaction is credit or debit
                             is_credit = transaction.credit_amount > 0
                             document_type = "BC" if is_credit else "BN"
-                            
+
                             # Generate document number
                             fee_doc_number = self.generate_document_number(
                                 document_type, transaction.datetime
                             )
-                            
+
                             # Format the date
                             formatted_date = self.format_date(
                                 transaction.datetime
                             )
-                            
+
                             # Determine accounts for fee record
                             fee_debit_account, fee_credit_account = (
                                 self.determine_accounts(
@@ -3625,7 +3786,7 @@ class IntegratedBankProcessor:
                                     ),
                                 )
                             )
-                            
+
                             # Create fee entry dictionary
                             fee_entry_dict = {
                                 "document_type": document_type,
@@ -3655,7 +3816,7 @@ class IntegratedBankProcessor:
                                 ),
                                 "transaction_type": "FEE",
                             }
-                            
+
                             # Add fee entry immediately after main entry
                             saoke_entries.append(fee_entry_dict)
                             self.logger.info(

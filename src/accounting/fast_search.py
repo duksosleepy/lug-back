@@ -50,13 +50,34 @@ def search_counterparties(query_text, field_name="name", limit=10):
 
         # Determine search strategy based on number of terms and field type
         if field_name == "code":
-            # For code searches, use exact or prefix matching
+            # For code searches, try multiple approaches with priority for exact matches
             if query_text.strip():
-                regex_pattern = f".*{query_text.strip()}.*"
-                query = Query.regex_query(
-                    index.schema, field_name, regex_pattern
-                )
-                logger.debug(f"Using code regex query for: {query_text}")
+                # Strategy 1: Try exact match first
+                exact_pattern = f"^{query_text.strip()}$"
+                try:
+                    exact_query = Query.regex_query(
+                        index.schema, field_name, exact_pattern
+                    )
+                    exact_result = searcher.search(exact_query, limit)
+                    if exact_result.hits:
+                        logger.info(f"Found exact match for code '{query_text}'")
+                        # If we found an exact match, use it and skip other strategies
+                        query = exact_query
+                    else:
+                        # Strategy 2: Try contains matching
+                        regex_pattern = f".*{query_text.strip()}.*"
+                        query = Query.regex_query(
+                            index.schema, field_name, regex_pattern
+                        )
+                        logger.debug(f"Using code regex query for: {query_text}")
+                except Exception as e:
+                    logger.warning(f"Error with exact regex search: {e}, falling back to contains search")
+                    # Strategy 2: Contains matching
+                    regex_pattern = f".*{query_text.strip()}.*"
+                    query = Query.regex_query(
+                        index.schema, field_name, regex_pattern
+                    )
+                    logger.debug(f"Using code regex query for: {query_text}")
             else:
                 return []
         elif len(processed_terms) > 1:
@@ -719,7 +740,7 @@ def search_pos_by_department(department_code, limit=50):
 
 
 def search_vcb_mids(query_text, field_name="mid", limit=10):
-    """Search VCB MIDs by mid, tid, name, or other fields"""
+    """Search VCB MIDs by mid, tid, name, or other fields with enhanced flexibility"""
     logger.info(
         f"Searching VCB MIDs for '{query_text}' in field '{field_name}' with limit {limit}"
     )
@@ -743,47 +764,44 @@ def search_vcb_mids(query_text, field_name="mid", limit=10):
 
         # Get searcher
         searcher = index.searcher()
+        
+        # Log all documents in the vcb_mids index for debugging (limit to 20)
+        try:
+            logger.info("Dumping all vcb_mids records for debugging:")
+            # Create a query that matches everything
+            all_docs_query = Query.regex_query(index.schema, "mid", ".*")
+            all_docs_result = searcher.search(all_docs_query, 20)
+            
+            logger.info(f"Found {len(all_docs_result.hits)} total records in vcb_mids index")
+            for i, (score, doc_address) in enumerate(all_docs_result.hits):
+                doc = searcher.doc(doc_address)
+                logger.info(f"Record {i+1}: MID={doc.get_first('mid') or 'N/A'}, "
+                           f"TID={doc.get_first('tid') or 'N/A'}, "
+                           f"Code={doc.get_first('code') or 'N/A'}")
+        except Exception as e:
+            logger.warning(f"Error dumping vcb_mids records: {e}")
 
         # Process the query text
         processed_terms = vietnamese_analyzer.analyze(query_text)
         logger.debug(f"Processed terms: {processed_terms}")
 
-        # Determine search strategy based on field type and query
+        # Try multiple search strategies and combine results
+        all_results = []
+        
+        # Strategy 1: Exact match first (prefix match for numeric fields)
         if field_name in ["mid", "tid", "account_number"]:
-            # For numeric/code fields, use regex for partial matching
-            regex_pattern = f".*{query_text}.*"
-            query = Query.regex_query(index.schema, field_name, regex_pattern)
-            logger.debug(
-                f"Using regex query for field '{field_name}': {query_text}"
-            )
-        elif len(processed_terms) > 1:
-            # Multi-term query for text fields - use phrase search
-            query = Query.phrase_query(
-                index.schema, field_name, processed_terms
-            )
-            logger.debug(f"Using phrase query for: {processed_terms}")
-        elif len(processed_terms) == 1:
-            # Single term for text fields - use regex for partial matching
-            processed_term = processed_terms[0]
-            regex_pattern = f".*{processed_term}.*"
-            query = Query.regex_query(index.schema, field_name, regex_pattern)
-            logger.debug(f"Using regex query for: {processed_term}")
-        else:
-            # Fallback to original query if no processed terms
-            regex_pattern = f".*{query_text}.*"
-            query = Query.regex_query(index.schema, field_name, regex_pattern)
-            logger.debug(f"Using fallback regex query for: {query_text}")
-
-        # Execute search
-        search_result = searcher.search(query, limit)
-        logger.debug(f"Search returned {len(search_result.hits)} hits")
-
-        # Format results
-        results = []
-        for score, doc_address in search_result.hits:
-            doc = searcher.doc(doc_address)
-            results.append(
-                {
+            # For numeric fields, try prefix match first
+            prefix_pattern = f"{query_text}.*"
+            prefix_query = Query.regex_query(index.schema, field_name, prefix_pattern)
+            logger.debug(f"Strategy 1: Using prefix regex query for '{field_name}': {prefix_pattern}")
+            
+            prefix_result = searcher.search(prefix_query, limit)
+            logger.debug(f"Prefix search returned {len(prefix_result.hits)} hits")
+            
+            # Add prefix results to all results
+            for score, doc_address in prefix_result.hits:
+                doc = searcher.doc(doc_address)
+                all_results.append({
                     "score": score,
                     "tid": doc.get_first("tid") or "",
                     "mid": doc.get_first("mid") or "",
@@ -794,11 +812,77 @@ def search_vcb_mids(query_text, field_name="mid", limit=10):
                     "account_holder": doc.get_first("account_holder") or "",
                     "account_number": doc.get_first("account_number") or "",
                     "bank_name": doc.get_first("bank_name") or "",
-                }
-            )
+                })
+        
+        # If we already found results, return them
+        if all_results:
+            logger.info(f"Found {len(all_results)} results with prefix match strategy")
+            return all_results
+            
+        # Strategy 2: Contains match (more flexible)
+        contains_pattern = f".*{query_text}.*"
+        contains_query = Query.regex_query(index.schema, field_name, contains_pattern)
+        logger.debug(f"Strategy 2: Using contains regex query for '{field_name}': {contains_pattern}")
+        
+        contains_result = searcher.search(contains_query, limit)
+        logger.debug(f"Contains search returned {len(contains_result.hits)} hits")
+        
+        # Add contains results to all results
+        for score, doc_address in contains_result.hits:
+            doc = searcher.doc(doc_address)
+            all_results.append({
+                "score": score,
+                "tid": doc.get_first("tid") or "",
+                "mid": doc.get_first("mid") or "",
+                "code": doc.get_first("code") or "",
+                "department_code": doc.get_first("department_code") or "",
+                "name": doc.get_first("name") or "",
+                "address": doc.get_first("address") or "",
+                "account_holder": doc.get_first("account_holder") or "",
+                "account_number": doc.get_first("account_number") or "",
+                "bank_name": doc.get_first("bank_name") or "",
+            })
+            
+        # If we still haven't found results and this is a MID search, try a more aggressive approach
+        if not all_results and field_name == "mid" and len(query_text) >= 4:
+            # Try searching with just the first few digits (merchants often have similar MID prefixes)
+            prefix = query_text[:4]  # First 4 digits
+            logger.info(f"Strategy 3: Trying with first 4 digits of MID: {prefix}")
+            
+            prefix_pattern = f"{prefix}.*"
+            prefix_query = Query.regex_query(index.schema, field_name, prefix_pattern)
+            prefix_result = searcher.search(prefix_query, limit)
+            
+            logger.debug(f"First 4 digits search returned {len(prefix_result.hits)} hits")
+            
+            # Add prefix results to all results
+            for score, doc_address in prefix_result.hits:
+                doc = searcher.doc(doc_address)
+                all_results.append({
+                    "score": score,
+                    "tid": doc.get_first("tid") or "",
+                    "mid": doc.get_first("mid") or "",
+                    "code": doc.get_first("code") or "",
+                    "department_code": doc.get_first("department_code") or "",
+                    "name": doc.get_first("name") or "",
+                    "address": doc.get_first("address") or "",
+                    "account_holder": doc.get_first("account_holder") or "",
+                    "account_number": doc.get_first("account_number") or "",
+                    "bank_name": doc.get_first("bank_name") or "",
+                })
 
-        logger.debug(f"Returning {len(results)} formatted VCB MID results")
-        return results
+        # Remove duplicates based on MID
+        seen_mids = set()
+        unique_results = []
+        
+        for result in all_results:
+            mid = result.get("mid", "")
+            if mid and mid not in seen_mids:
+                seen_mids.add(mid)
+                unique_results.append(result)
+        
+        logger.info(f"Returning {len(unique_results)} unique VCB MID results after deduplication")
+        return unique_results
 
     except Exception as e:
         logger.error(f"Error searching VCB MIDs: {e}")

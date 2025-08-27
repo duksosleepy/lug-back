@@ -61,7 +61,9 @@ def process_vcb_pos_transaction(
 
     # 2. Extract VAT amount for fee record
     # First try to extract VAT amount after the equals sign (format: VAT Amt:89,925.00/11 = 8,175.00)
-    vat_match = re.search(r"VAT Amt:.*?/11\s*=\s*([0-9,]+\.[0-9]+)", description)
+    vat_match = re.search(
+        r"VAT Amt:.*?/11\s*=\s*([0-9,]+\.[0-9]+)", description
+    )
     if not vat_match:
         # If not found, try the simpler format (VAT Amt:89,925.00)
         vat_match = re.search(r"VAT Amt:([0-9,]+\.[0-9]+)", description)
@@ -82,22 +84,72 @@ def process_vcb_pos_transaction(
     # 3. Search for MID in vcb_mids index
     from src.accounting.fast_search import search_vcb_mids
 
+    # Log that we're searching for this MID
+    logger.info(f"Searching for MID: {mid} in vcb_mids index")
+
+    # First try exact search
     mid_records = search_vcb_mids(mid, field_name="mid", limit=1)
+
+    # If not found, try searching as a prefix
     if not mid_records:
-        logger.warning(f"MID not found in vcb_mids index: {mid}")
-        return [transaction_data]  # Return original if MID not found
+        logger.warning(
+            f"MID not found with exact match: {mid}, trying partial match"
+        )
+        # Try partial match with regex search
+        mid_records = search_vcb_mids(mid[:4], field_name="mid", limit=5)
+        if mid_records:
+            # Find the closest match if any
+            logger.info(
+                f"Found {len(mid_records)} potential matches with prefix: {mid[:4]}"
+            )
+            for rec in mid_records:
+                logger.info(
+                    f"Potential match: MID={rec.get('mid', 'N/A')}, Code={rec.get('code', 'N/A')}"
+                )
+        else:
+            logger.warning(
+                f"No MID matches found even with partial search: {mid}"
+            )
+            return [transaction_data]  # Return original if MID not found
 
     mid_record = mid_records[0]
+    logger.info(f"Selected MID record: {mid_record}")
 
     # 4. Extract code and tid
     code = mid_record.get("code", "")
     tid = mid_record.get("tid", "")
 
-    # 5. Process code (get part after "_" or "-")
-    if "-" in code:
+    # Log the extracted values
+    logger.info(f"Extracted code: '{code}', tid: '{tid}' from MID record")
+
+    # Check if code is empty and try additional fields
+    if not code:
+        logger.warning(
+            f"Empty code for MID {mid}, trying department_code field"
+        )
+        code = mid_record.get("department_code", "")
+        if code:
+            logger.info(f"Found code in department_code field: {code}")
+
+    # 5. Process code (get part after "*", "_" or "-")
+    if not code:
+        logger.error(f"Empty code value received for MID: {mid}")
+        processed_code = "KL"  # Default to KL if code is empty
+    elif "-" in code:
         processed_code = code.split("-")[1]
+        logger.info(
+            f"Processed code with '-' delimiter: {code} -> {processed_code}"
+        )
     elif "_" in code:
         processed_code = code.split("_")[1]
+        logger.info(
+            f"Processed code with '_' delimiter: {code} -> {processed_code}"
+        )
+    elif "*" in code:
+        processed_code = code.split("*")[1]
+        logger.info(
+            f"Processed code with '*' delimiter: {code} -> {processed_code}"
+        )
     else:
         processed_code = code
         logger.warning(f"Unexpected code format (missing delimiter): {code}")
@@ -132,11 +184,39 @@ def process_vcb_pos_transaction(
         fee_record["debit_account"] = "6417"
 
     # 8. Use the processed code to find counterparty
-    from src.accounting.fast_search import search_counterparties
+    from src.accounting.fast_search import search_exact_counterparties
 
-    counterparty_results = search_counterparties(
+    logger.info(
+        f"Searching for counterparty with processed code: {processed_code}"
+    )
+    counterparty_results = search_exact_counterparties(
         processed_code, field_name="code", limit=1
     )
+
+    if not counterparty_results:
+        logger.warning(
+            f"No counterparty found for processed code: {processed_code}"
+        )
+        # Try searching with a more flexible approach
+        logger.info(
+            f"Trying partial search for counterparty code: {processed_code}"
+        )
+        counterparty_results = search_exact_counterparties(
+            processed_code, field_name="code", limit=5
+        )
+
+        if counterparty_results:
+            logger.info(
+                f"Found {len(counterparty_results)} potential counterparties with partial search"
+            )
+            for cp in counterparty_results:
+                logger.info(
+                    f"Potential counterparty: Code={cp.get('code', 'N/A')}, Name={cp.get('name', 'N/A')}"
+                )
+        else:
+            logger.warning(
+                f"No counterparties found even with partial search for: {processed_code}"
+            )
 
     if counterparty_results:
         counterparty = counterparty_results[0]
@@ -146,7 +226,9 @@ def process_vcb_pos_transaction(
             record["counterparty_name"] = counterparty.get("name", "")
             record["address"] = counterparty.get("address", "")
 
-    logger.info(f"Processed {card_type} transaction successfully with MID {mid}, TID {tid}")
+    logger.info(
+        f"Processed {card_type} transaction successfully with MID {mid}, TID {tid}"
+    )
     return [main_record, fee_record]
 
 
@@ -353,9 +435,12 @@ def process_generic_vcb_transaction(
         list: List of processed transaction records (main and fee)
     """
     logger.info(f"Processing generic VCB transaction: {description}")
-    
+
     # Check for special cases first
-    if "T/t T/ung the MASTER" in description or "T/t T/ung the VISA" in description:
+    if (
+        "T/t T/ung the MASTER" in description
+        or "T/t T/ung the VISA" in description
+    ):
         return process_vcb_pos_transaction(description, transaction_data)
     elif "IBVCB" in description:
         return process_vcb_transfer_transaction(description, transaction_data)
@@ -379,11 +464,13 @@ def process_generic_vcb_transaction(
 
     # Try to extract VAT amount for fee record
     # First try to extract VAT amount after the equals sign (format: VAT Amt:89,925.00/11 = 8,175.00)
-    vat_match = re.search(r"VAT Amt:.*?/11\s*=\s*([0-9,]+\.[0-9]+)", description)
+    vat_match = re.search(
+        r"VAT Amt:.*?/11\s*=\s*([0-9,]+\.[0-9]+)", description
+    )
     if not vat_match:
         # If not found, try the simpler format (VAT Amt:89,925.00)
         vat_match = re.search(r"VAT Amt:([0-9,]+\.[0-9]+)", description)
-    
+
     if vat_match:
         # Parse VAT amount
         vat_amount_str = vat_match.group(1)

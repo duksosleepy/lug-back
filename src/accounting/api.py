@@ -945,16 +945,25 @@ async def process_bank_statement(file: UploadFile):
                                     "Using hardcoded mapping for account 3840"
                                 )
                                 processor.default_bank_account = "1121115"  # Use a different account than default
-                                
+
                 # Make sure VCB bank name is set if filename contains VCB
-                if file and file.filename and ("VCB" in file.filename.upper() or "VIETCOMBANK" in file.filename.upper()):
-                    logger.info(f"Setting bank to VCB based on filename: {file.filename}")
+                if (
+                    file
+                    and file.filename
+                    and (
+                        "VCB" in file.filename.upper()
+                        or "VIETCOMBANK" in file.filename.upper()
+                    )
+                ):
+                    logger.info(
+                        f"Setting bank to VCB based on filename: {file.filename}"
+                    )
                     processor.current_bank_name = "VCB"
                     processor.current_bank_info = {
                         "code": "VCB",
                         "name": "NGÂN HÀNG TMCP NGOẠI THƯƠNG VIỆT NAM",
                         "short_name": "VCB",
-                        "address": "198 Trần Quang Khải, Hoàn Kiếm, Hà Nội"
+                        "address": "198 Trần Quang Khải, Hoàn Kiếm, Hà Nội",
                     }
 
                 # Step 3: Now that we have the transactions_df, use the processor to determine
@@ -1067,18 +1076,31 @@ async def process_bank_statement(file: UploadFile):
                             logger.info(
                                 f"Setting ACB bank info for 'LAI NHAP VON' transaction at row {idx}"
                             )
-                            processed_df.at[idx, "counterparty_code"] = "301452948"
-                            processed_df.at[idx, "counterparty_name"] = "NGÂN HÀNG TMCP Á CHÂU"
-                            processed_df.at[idx, "address"] = "442 Nguyễn Thị Minh Khai, Phường 05, Quận 3, Thành phố Hồ Chí Minh, Việt Nam"
-                            
+                            processed_df.at[idx, "counterparty_code"] = (
+                                "301452948"
+                            )
+                            processed_df.at[idx, "counterparty_name"] = (
+                                "NGÂN HÀNG TMCP Á CHÂU"
+                            )
+                            processed_df.at[idx, "address"] = (
+                                "442 Nguyễn Thị Minh Khai, Phường 05, Quận 3, Thành phố Hồ Chí Minh, Việt Nam"
+                            )
+
                             # Ensure special account handling too
-                            is_credit = (row.get("credit_amount", 0) > 0 or row.get("credit", 0) > 0)
+                            is_credit = (
+                                row.get("credit_amount", 0) > 0
+                                or row.get("credit", 0) > 0
+                            )
                             if is_credit:
                                 processed_df.at[idx, "credit_account"] = "811"
-                                logger.info("Setting credit account to 811 for LAI NHAP VON transaction")
+                                logger.info(
+                                    "Setting credit account to 811 for LAI NHAP VON transaction"
+                                )
                             else:
                                 processed_df.at[idx, "debit_account"] = "811"
-                                logger.info("Setting debit account to 811 for LAI NHAP VON transaction")
+                                logger.info(
+                                    "Setting debit account to 811 for LAI NHAP VON transaction"
+                                )
 
                 # Override counterparty information for HUYNH THI THANH TAM
                 if thanh_tam_present:
