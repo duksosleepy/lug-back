@@ -1013,6 +1013,31 @@ async def process_bank_statement(file: UploadFile):
                     "Using process_to_saoke method for comprehensive transaction processing"
                 )
 
+                # Special handling for LAI NHAP VON in ACB statements
+                lai_nhap_von_acb_present = False
+                for _, row in transactions_df.iterrows():
+                    description = str(row.get("description", ""))
+                    if (
+                        "LAI NHAP VON" in description.upper()
+                        and processor.current_bank_name == "ACB"
+                    ):
+                        logger.info(
+                            f"Found 'LAI NHAP VON' in ACB statement: {description}"
+                        )
+                        lai_nhap_von_acb_present = True
+                        # The processor will handle special logic for this case
+
+                # Special handling for HUYNH THI THANH TAM transactions
+                thanh_tam_present = False
+                for idx, row in transactions_df.iterrows():
+                    description = str(row.get("description", ""))
+                    if "HUYNH THI THANH TAM" in description.upper():
+                        logger.info(
+                            f"Special handling for HUYNH THI THANH TAM transaction at row {idx}"
+                        )
+                        thanh_tam_present = True
+                        # The amount is not changed - only the account number will be set in processed_df
+
                 # Call process_to_saoke with the transactions DataFrame
                 processed_df = processor.process_to_saoke(transactions_df)
 
@@ -1022,6 +1047,58 @@ async def process_bank_statement(file: UploadFile):
                         success=False,
                         message="No transactions were successfully processed.",
                     )
+
+                # Override counterparty information for special cases
+                if lai_nhap_von_acb_present:
+                    for idx, row in processed_df.iterrows():
+                        description = str(row.get("description", ""))
+                        if "LAI NHAP VON" in description.upper():
+                            logger.info(
+                                f"Setting ACB bank info for 'LAI NHAP VON' transaction at row {idx}"
+                            )
+                            processed_df.at[idx, "counterparty_code"] = "301452948"
+                            processed_df.at[idx, "counterparty_name"] = "NGÂN HÀNG TMCP Á CHÂU"
+                            processed_df.at[idx, "address"] = "442 Nguyễn Thị Minh Khai, Phường 05, Quận 3, Thành phố Hồ Chí Minh, Việt Nam"
+                            
+                            # Ensure special account handling too
+                            is_credit = (row.get("credit_amount", 0) > 0 or row.get("credit", 0) > 0)
+                            if is_credit:
+                                processed_df.at[idx, "credit_account"] = "811"
+                                logger.info("Setting credit account to 811 for LAI NHAP VON transaction")
+                            else:
+                                processed_df.at[idx, "debit_account"] = "811"
+                                logger.info("Setting debit account to 811 for LAI NHAP VON transaction")
+
+                # Override counterparty information for HUYNH THI THANH TAM
+                if thanh_tam_present:
+                    for idx, row in processed_df.iterrows():
+                        description = str(row.get("description", ""))
+                        if "HUYNH THI THANH TAM" in description.upper():
+                            logger.info(
+                                f"Setting HUYNH THI THANH TAM info for transaction at row {idx}"
+                            )
+                            processed_df.at[idx, "counterparty_code"] = "HTTT"
+                            processed_df.at[idx, "counterparty_name"] = (
+                                "HUỲNH THỊ THANH TÂM"
+                            )
+                            processed_df.at[idx, "address"] = (
+                                "D05.3 Tầng 6, C/c An Phú, 959-961-965 Hậu Giang, P.11, Q.6, TP.HCM"
+                            )
+                            # Set debit/credit account to 3388
+                            is_credit = (
+                                row.get("credit_amount", 0) > 0
+                                or row.get("credit", 0) > 0
+                            )
+                            if is_credit:
+                                processed_df.at[idx, "credit_account"] = "3388"
+                                logger.info(
+                                    "Setting credit account to 3388 for HUYNH THI THANH TAM transaction"
+                                )
+                            else:
+                                processed_df.at[idx, "debit_account"] = "3388"
+                                logger.info(
+                                    "Setting debit account to 3388 for HUYNH THI THANH TAM transaction"
+                                )
 
                 # Convert processed DataFrame to saoke entries list
                 saoke_entries = processed_df.to_dict("records")

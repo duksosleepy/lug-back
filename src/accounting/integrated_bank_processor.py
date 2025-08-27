@@ -269,7 +269,7 @@ class IntegratedBankProcessor:
             "GIAI NGAN TKV": "34111",  # Alternative for loan disbursement (NEW)
             "PHI TT": "6427",  # Transaction fee (NEW)
             "THU PHI TT": "6427",  # Transaction fee alternative (NEW)
-            "LAI NHAP VON": "811",  # Interest income (NEW)
+            "LAI NHAP VON": "811",  # Interest income (NEW) - ACB statement
             "TRICH THU TIEN VAY - LAI": "6354",  # Loan interest payment (NEW)
         }
 
@@ -778,6 +778,162 @@ class IntegratedBankProcessor:
 
         return codes
 
+    def extract_last_number_for_counterparty(
+        self, description: str
+    ) -> Optional[str]:
+        """
+        Extract the last number from description for counterparty lookup.
+
+        Enhanced to handle various formats including:
+        - "GNOL 1246.20250617 492026129" - extracts 492026129
+        - "TRICH THU TIEN VAY - LAI : 3579090 - ACCT VAY 488972159" - extracts 488972159
+
+        Business rule: For loan-related transactions (TRICH TAI KHOAN, THU NV, GNOL),
+        the last number in the description is typically the loan account number used as counterparty code.
+
+        Args:
+            description: Transaction description
+
+        Returns:
+            The last number found (6+ digits) or None if no suitable number found
+        """
+        if not description:
+            return None
+
+        # Special handling for "GNOL" format (example 4)
+        if "GNOL" in description:
+            # Extract the last number in the description after the date part
+            # GNOL <date> <account_number>
+            numbers = re.findall(r"\b(\d{9,})\b", description)
+            if numbers:
+                last_number = numbers[-1]  # Get the rightmost number
+                self.logger.info(
+                    f"Extracted GNOL account number '{last_number}' from: {description}"
+                )
+                return last_number
+
+        # Special handling for "TRICH THU TIEN VAY" format (example 5)
+        if "TRICH THU TIEN VAY" in description or "ACCT VAY" in description:
+            # Try to extract account number after "ACCT VAY" first
+            acct_match = re.search(r"ACCT\s+VAY\s+(\d+)", description)
+            if acct_match:
+                account_number = acct_match.group(1)
+                self.logger.info(
+                    f"Extracted ACCT VAY account number '{account_number}' from: {description}"
+                )
+                return account_number
+
+        # Extract all numbers (6+ digits to avoid dates, small codes)
+        numbers = re.findall(r"\b(\d{6,})\b", description)
+
+        if numbers:
+            last_number = numbers[-1]  # Get the rightmost number
+            self.logger.info(
+                f"Extracted last number '{last_number}' from: {description}"
+            )
+            return last_number
+
+        self.logger.debug(f"No suitable last number found in: {description}")
+        return None
+
+    def search_counterparty_by_last_number(
+        self, last_number: str
+    ) -> Optional[Dict]:
+        """
+        Search counterparty using the extracted last number as code.
+
+        Args:
+            last_number: The numeric code to search for
+
+        Returns:
+            Dictionary with counterparty info (code, name, address) if found, None otherwise
+        """
+        from src.accounting.fast_search import search_exact_counterparties
+
+        if not last_number:
+            return None
+
+        self.logger.info(
+            f"Searching counterparty by last number: {last_number}"
+        )
+
+        try:
+            results = search_exact_counterparties(
+                last_number, field_name="code", limit=1
+            )
+
+            if results and results[0].get("code"):
+                counterparty = results[0]
+                self.logger.info(
+                    f"Found counterparty for number '{last_number}': {counterparty['name']} ({counterparty['code']})"
+                )
+                return {
+                    "code": counterparty["code"],
+                    "name": counterparty["name"],
+                    "address": counterparty.get("address", ""),
+                    "phone": counterparty.get("phone", ""),
+                    "tax_id": counterparty.get("tax_id", ""),
+                    "source": "last_number_lookup",
+                }
+            else:
+                self.logger.warning(
+                    f"No counterparty found for last number: {last_number}"
+                )
+                return None
+
+        except Exception as e:
+            self.logger.error(
+                f"Error searching counterparty by last number '{last_number}': {e}"
+            )
+            return None
+
+    def should_use_last_number_logic(self, description: str) -> bool:
+        """
+        Check if transaction should use last number counterparty logic.
+
+        Returns True for transactions containing specific keywords that indicate
+        the last number should be used for counterparty lookup.
+
+        Enhanced to detect additional formats like:
+        - "GNOL 1246.20250617 492026129"
+        - "TRICH THU TIEN VAY - LAI : 3579090 - ACCT VAY 488972159"
+
+        Args:
+            description: Transaction description
+
+        Returns:
+            True if should use last number logic, False otherwise
+        """
+        if not description:
+            return False
+
+        # Keywords that indicate last number should be used for counterparty lookup
+        last_number_keywords = [
+            "TRICH TAI KHOAN",  # Account deduction
+            "THU NV",  # Interest collection
+            "GNOL",  # Loan disbursement
+            "GIAI NGAN",  # Loan disbursement alternative
+            "TRICH THU TIEN VAY",  # Loan interest/principal collection
+            "ACCT VAY",  # Loan account reference
+            "TRA NO TRUOC HAN",  # Early loan repayment
+            "THANH LY TK VAY",  # Loan account liquidation
+        ]
+
+        normalized_desc = self._normalize_vietnamese_text(description)
+
+        for keyword in last_number_keywords:
+            normalized_keyword = self._normalize_vietnamese_text(keyword)
+            if normalized_keyword in normalized_desc:
+                self.logger.info(
+                    f"Found last number trigger keyword '{keyword}' in: {description}"
+                )
+                return True
+
+        self.logger.debug(
+            f"No last number trigger keywords found in: {description}"
+        )
+        return False
+
     def find_account_by_code(self, numeric_code: str) -> Optional[AccountMatch]:
         """
         Find account by numeric code in the name column using fast_search instead of SQL
@@ -978,6 +1134,230 @@ class IntegratedBankProcessor:
         """
         if not department_code or not isinstance(department_code, str):
             return ""
+
+    def _detect_vietnamese_person_name_in_description(
+        self, description: str
+    ) -> bool:
+        """
+        Detect Vietnamese person names in transaction description for MBB online detection
+
+        Uses existing person name patterns from CounterpartyExtractor to identify
+        Vietnamese individual names that should trigger KLONLINE rule.
+
+        Args:
+            description: Transaction description to analyze
+
+        Returns:
+            True if Vietnamese person name is detected, False otherwise
+        """
+        if not description:
+            return False
+
+        # Use the existing person name patterns from counterparty extractor
+        person_patterns = [
+            (
+                r"cho\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"gui cho\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"cho\s+(?:ong|ba)\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"hoan tien(?:\s+don hang)?(?:\s+cho)?\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"thanh toan cho\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"chuyen tien cho\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            # More generic pattern to catch names after common phrases
+            (
+                r"(?:cho|gui|chuyen khoan|thanh toan).*?([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})\s+-",
+                "person",
+            ),
+        ]
+
+        for pattern, _ in person_patterns:
+            match = re.search(pattern, description, re.IGNORECASE)
+            if match:
+                person_name = match.group(1).strip()
+                self.logger.info(
+                    f"Detected Vietnamese person name '{person_name}' in MBB description: {description}"
+                )
+                return True
+
+        return False
+
+    def _extract_vietnamese_person_name_from_description(
+        self, description: str
+    ) -> str:
+        """
+        Extract the actual Vietnamese person name from description for logging/debugging
+
+        Returns:
+            The person name found, or empty string if none found
+        """
+        if not description:
+            return ""
+
+        person_patterns = [
+            (
+                r"cho\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"gui cho\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"cho\s+(?:ong|ba)\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"hoan tien(?:\s+don hang)?(?:\s+cho)?\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"thanh toan cho\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"chuyen tien cho\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"(?:cho|gui|chuyen khoan|thanh toan).*?([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})\s+-",
+                "person",
+            ),
+        ]
+
+        for pattern, _ in person_patterns:
+            match = re.search(pattern, description, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+
+        return ""
+
+    def _detect_vietnamese_person_name_in_description(
+        self, description: str
+    ) -> bool:
+        """
+        Detect Vietnamese person names in transaction description for MBB online detection
+
+        Uses existing person name patterns from CounterpartyExtractor to identify
+        Vietnamese individual names that should trigger KLONLINE rule.
+
+        Args:
+            description: Transaction description to analyze
+
+        Returns:
+            True if Vietnamese person name is detected, False otherwise
+        """
+        if not description:
+            return False
+
+        # Use the existing person name patterns from counterparty extractor
+        person_patterns = [
+            (
+                r"cho\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"gui cho\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"cho\s+(?:ong|ba)\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"hoan tien(?:\s+don hang)?(?:\s+cho)?\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"thanh toan cho\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"chuyen tien cho\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            # More generic pattern to catch names after common phrases
+            (
+                r"(?:cho|gui|chuyen khoan|thanh toan).*?([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})\s+-",
+                "person",
+            ),
+        ]
+
+        for pattern, _ in person_patterns:
+            match = re.search(pattern, description, re.IGNORECASE)
+            if match:
+                person_name = match.group(1).strip()
+                self.logger.info(
+                    f"Detected Vietnamese person name '{person_name}' in MBB description: {description}"
+                )
+                return True
+
+        return False
+
+    def _extract_vietnamese_person_name_from_description(
+        self, description: str
+    ) -> str:
+        """
+        Extract the actual Vietnamese person name from description for logging/debugging
+
+        Returns:
+            The person name found, or empty string if none found
+        """
+        if not description:
+            return ""
+
+        person_patterns = [
+            (
+                r"cho\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"gui cho\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"cho\s+(?:ong|ba)\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"hoan tien(?:\s+don hang)?(?:\s+cho)?\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"thanh toan cho\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"chuyen tien cho\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})(?:\s+[-]|$)",
+                "person",
+            ),
+            (
+                r"(?:cho|gui|chuyen khoan|thanh toan).*?([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,5})\s+-",
+                "person",
+            ),
+        ]
+
+        for pattern, _ in person_patterns:
+            match = re.search(pattern, description, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+
+        return ""
 
         original_code = department_code.strip()
         self.logger.debug(
@@ -1459,6 +1839,35 @@ class IntegratedBankProcessor:
 
             # Normalize the keyword for comparison
             normalized_keyword = self._normalize_vietnamese_text(keyword)
+
+            # Special case for ACB LAI NHAP VON transactions
+            if (
+                normalized_keyword == "LAI NHAP VON"
+                and "LAI NHAP VON" in normalized_desc
+                and self.current_bank_name == "ACB"
+            ):
+                self.logger.info(
+                    f"Found 'LAI NHAP VON' in ACB statement: '{description}'"
+                )
+
+                # Use ACB bank information as the counterparty
+                # This will be used later in process_transaction to enhance the entry
+                self._current_transaction_is_interest_payment = True
+
+                # Determine debit/credit based on document type
+                if document_type == "BC":  # Receipt/Credit transaction
+                    # For receipts: money comes into bank, special account is credited
+                    debit_account = self.default_bank_account
+                    credit_account = special_account
+                else:  # BN - Payment/Debit transaction
+                    # For payments: money goes out of bank, special account is debited
+                    debit_account = special_account
+                    credit_account = self.default_bank_account
+
+                self.logger.info(
+                    f"ACB LAI NHAP VON special account mapping: Dr={debit_account}, Cr={credit_account}"
+                )
+                return debit_account, credit_account
 
             if normalized_keyword in normalized_desc:
                 self.logger.info(
@@ -2316,23 +2725,42 @@ class IntegratedBankProcessor:
                 "counterparties", []
             )
 
-            # **PRIORITY 0 (HIGHEST): MBB Phone Number Detection for Online Transactions**
-            # Check if current bank is MBB and transaction description contains phone number
+            # **PRIORITY 0 (HIGHEST): MBB Detection for Online Transactions**
+            # Check if current bank is MBB and transaction description contains phone number OR Vietnamese person name
             if (
                 self.current_bank_name
                 and self.current_bank_name.upper() == "MBB"
-                and self._detect_phone_number_in_description(
-                    transaction.description
+                and (
+                    self._detect_phone_number_in_description(
+                        transaction.description
+                    )
+                    or self._detect_vietnamese_person_name_in_description(
+                        transaction.description
+                    )
                 )
             ):
-                # Extract the phone number for logging
+                # Extract the phone number for logging (if present)
                 phone_number = self._extract_phone_number_from_description(
                     transaction.description
                 )
 
+                # Extract person name for logging (if present and no phone number)
+                person_name = ""
+                if not phone_number:
+                    person_name = (
+                        self._extract_vietnamese_person_name_from_description(
+                            transaction.description
+                        )
+                    )
+
+                detection_reason = (
+                    "phone" if phone_number else "vietnamese_name"
+                )
+                detected_value = phone_number if phone_number else person_name
+
                 self.logger.info(
                     f"MBB Online Transaction Detected: Bank={self.current_bank_name}, "
-                    f"Phone={phone_number}, Description={transaction.description}"
+                    f"Reason={detection_reason}, Value={detected_value}, Description={transaction.description}"
                 )
 
                 # Apply MBB online transaction business logic
@@ -2340,13 +2768,14 @@ class IntegratedBankProcessor:
                     "code": "KLONLINE",
                     "name": "KHÁCH LẺ KHÔNG LẤY HÓA ĐƠN (ONLINE)",
                     "address": "4 Grand Canal Square, Grand Canal Harbour, Dublin 2, Ireland",
-                    "source": "mbb_phone_number_detection",
-                    "condition_applied": "mbb_online_phone_detected",
+                    "source": "mbb_online_detection",
+                    "condition_applied": f"mbb_online_{detection_reason}_detected",
                     "phone": phone_number,
+                    "person_name": person_name,
                     "tax_id": "",
                 }
 
-                # Modify description for MBB phone transactions
+                # Modify description for MBB online transactions (phone or Vietnamese name detected)
                 # Extract PO number if available
                 po_match = re.search(
                     r"PO\s*[:-]?\s*([A-Z0-9]+)",
@@ -2365,7 +2794,7 @@ class IntegratedBankProcessor:
 
                 self.logger.info(
                     f"Applied MBB online counterparty logic: Code={counterparty_info['code']}, "
-                    f"Name={counterparty_info['name']}, Phone={phone_number}"
+                    f"Name={counterparty_info['name']}, Reason={detection_reason}, Value={detected_value}"
                 )
             else:
                 # Only apply existing counterparty logic if MBB phone number detection didn't trigger
@@ -2607,6 +3036,94 @@ class IntegratedBankProcessor:
                         f"Sang Tam transfer detected but formatting failed, using original: {description}"
                     )
 
+            # Check for loan-related transactions using should_use_last_number_logic
+            elif self.should_use_last_number_logic(transaction.description):
+                # Extract the last number from the description
+                last_number = self.extract_last_number_for_counterparty(
+                    transaction.description
+                )
+
+                if last_number:
+                    # Search for counterparty by the last number
+                    loan_counterparty = self.search_counterparty_by_last_number(
+                        last_number
+                    )
+
+                    if loan_counterparty:
+                        # Update counterparty info with the loan counterparty
+                        counterparty_code = loan_counterparty.get(
+                            "code", counterparty_code
+                        )
+                        counterparty_name = loan_counterparty.get(
+                            "name", counterparty_name
+                        )
+                        address = loan_counterparty.get("address", address)
+
+                        self.logger.info(
+                            f"Applied loan last number logic: Found counterparty {counterparty_code} ({counterparty_name}) for last number {last_number}"
+                        )
+                    else:
+                        self.logger.warning(
+                            f"No counterparty found for loan account number: {last_number}"
+                        )
+                else:
+                    self.logger.warning(
+                        f"Could not extract last number from loan-related transaction: {transaction.description}"
+                    )
+
+                # Process specific loan-related patterns for description formatting
+                if "TRICH TAI KHOAN" in transaction.description.upper():
+                    # Extract the account number from the description
+                    account_match = re.search(
+                        r"TK VAY (\d+)", transaction.description.upper()
+                    )
+                    if account_match:
+                        account_number = account_match.group(1)
+
+                        if (
+                            "THANH LY" in transaction.description.upper()
+                            or "THU THANH LY" in transaction.description.upper()
+                        ):
+                            description = (
+                                f"Trả hết nợ gốc TK vay KU {account_number}"
+                            )
+                            # Set account to 34111
+                            debit_account = "34111"
+                            credit_account = self.default_bank_account
+                        elif (
+                            "TRA NO TRUOC HAN"
+                            in transaction.description.upper()
+                        ):
+                            description = (
+                                f"Trả nợ trược hạn TK vay KU {account_number}"
+                            )
+                        else:
+                            description = transaction.description
+                    else:
+                        description = transaction.description
+                elif "##THU NV" in transaction.description.upper():
+                    # Extract the account number
+                    account_match = re.search(
+                        r"##THU NV (\d+)##", transaction.description.upper()
+                    )
+                    if account_match:
+                        account_number = account_match.group(1)
+                        description = f"Trả lãi vay KU {account_number}"
+                    else:
+                        description = transaction.description
+                elif "GNOL" in transaction.description.upper():
+                    # Extract the account number
+                    account_match = re.search(
+                        r"GNOL \S+\s+(\d+)", transaction.description.upper()
+                    )
+                    if account_match:
+                        account_number = account_match.group(1)
+                        description = f"Nhận giải ngân HĐGN {account_number}"
+                    else:
+                        description = transaction.description
+                else:
+                    description = transaction.description
+
             # NEW BUSINESS LOGIC: Special handling for "ONL KDV PO" pattern
             elif self._detect_onl_kdv_po_pattern(transaction.description):
                 formatted_onl_kdv_po_desc = self._format_onl_kdv_po_description(
@@ -2700,75 +3217,7 @@ class IntegratedBankProcessor:
                             f"Applied enhanced 'Phí cà thẻ' logic with bank info from filename: {description}\n"
                             f"Counterparty Code: {counterparty_code}, Counterparty Name: {counterparty_name}"
                         )
-            # RULE 1 & 2: Special handling for "TRICH TAI KHOAN" patterns
-            elif "TRICH TAI KHOAN" in transaction.description.upper():
-                # Extract the account number from the description
-                account_match = re.search(
-                    r"TK VAY (\d+)", transaction.description.upper()
-                )
-                if account_match:
-                    account_number = account_match.group(1)
-
-                    # Check if it's "THANH LY" or "TRA NO TRUOC HAN" or "THU THANH LY"
-                    if (
-                        "THANH LY" in transaction.description.upper()
-                        or "THU THANH LY" in transaction.description.upper()
-                    ):
-                        description = (
-                            f"Trả hết nợ gốc TK vay KU {account_number}"
-                        )
-                        # Set account to 34111
-                        debit_account = "34111"
-                        credit_account = self.default_bank_account
-                    elif "TRA NO TRUOC HAN" in transaction.description.upper():
-                        description = (
-                            f"Trả nợ trược hạn TK vay KU {account_number}"
-                        )
-                    else:
-                        description = transaction.description
-
-                    self.logger.info(
-                        f"Applied TRICH TAI KHOAN formatting: {description}"
-                    )
-                else:
-                    description = transaction.description
-                    self.logger.warning(
-                        f"TRICH TAI KHOAN pattern detected but couldn't extract account number: {description}"
-                    )
-
-            # RULE 3: Special handling for "THU NV" pattern
-            elif "##THU NV" in transaction.description.upper():
-                # Extract the account number
-                account_match = re.search(
-                    r"##THU NV (\d+)##", transaction.description.upper()
-                )
-                if account_match:
-                    account_number = account_match.group(1)
-                    description = f"Trả lãi vay KU {account_number}"
-                    self.logger.info(
-                        f"Applied THU NV formatting: {description}"
-                    )
-                else:
-                    description = transaction.description
-                    self.logger.warning(
-                        f"THU NV pattern detected but couldn't extract account number: {description}"
-                    )
-
-            # RULE 4: Special handling for "GNOL" pattern
-            elif "GNOL" in transaction.description.upper():
-                # Extract the account number
-                account_match = re.search(
-                    r"GNOL \S+\s+(\d+)", transaction.description.upper()
-                )
-                if account_match:
-                    account_number = account_match.group(1)
-                    description = f"Nhận giải ngân HĐGN {account_number}"
-                    self.logger.info(f"Applied GNOL formatting: {description}")
-                else:
-                    description = transaction.description
-                    self.logger.warning(
-                        f"GNOL pattern detected but couldn't extract account number: {description}"
-                    )
+            # Skip TRICH TAI KHOAN, THU NV, and GNOL patterns as they are now handled in the loan-related transaction section above
 
             # RULE 5: Special handling for bank deposits with "NT" pattern
             elif "#NT##" in transaction.description.upper() or (
@@ -3216,6 +3665,36 @@ def test_integrated_processor():
             description="T/t T/ung the VISA:CT TNHH SANG TAM; MerchNo: 3700109907 Gross Amt: Not On-Us=399,000.00 VND; VAT Amt:13,079.00/11 = 1,189.00 VND(VAT code:0306131754); Code:1005; SLGD: Not On-Us=1; Ngay 15/06/2025.",
         )
 
+        # Test with MBB phone number transaction (existing functionality)
+        example_mbb_phone = RawTransaction(
+            reference="0771MBB-PHONE123",
+            datetime=datetime(2025, 3, 5, 10, 30, 0),
+            debit_amount=0,
+            credit_amount=1500000,
+            balance=68500000,
+            description="Chuyen khoan cho 0903123456 - PO ABC123",
+        )
+
+        # Test with MBB Vietnamese person name transaction (NEW functionality)
+        example_mbb_name = RawTransaction(
+            reference="0771MBB-NAME123",
+            datetime=datetime(2025, 3, 5, 11, 45, 0),
+            debit_amount=0,
+            credit_amount=2000000,
+            balance=70500000,
+            description="Chuyen tien cho Nguyen Van An - PO DEF456",
+        )
+
+        # Test with MBB Vietnamese person name transaction (different pattern)
+        example_mbb_name2 = RawTransaction(
+            reference="0771MBB-NAME456",
+            datetime=datetime(2025, 3, 5, 14, 20, 0),
+            debit_amount=0,
+            credit_amount=1800000,
+            balance=72300000,
+            description="Thanh toan cho Le Thi Bao - PO GHI789",
+        )
+
         example2 = RawTransaction(
             reference="0771NE9A-8YKBRMYAC",
             datetime=datetime(2025, 3, 2, 10, 15, 30),
@@ -3278,6 +3757,55 @@ def test_integrated_processor():
             print(f"Amount: {entry2.amount1:,.0f}")
             print(f"Debit Account: {entry2.debit_account}")
             print(f"Credit Account: {entry2.credit_account}")
+
+        # Set current bank to MBB for testing MBB-specific functionality
+        processor.current_bank_name = "MBB"
+        processor.current_bank_info = {
+            "code": "MB",
+            "name": "Ngân hàng TMCP Quân đội",
+            "short_name": "MBB",
+            "address": "Hà Nội, Việt Nam",
+        }
+
+        print(
+            "\nProcessing MBB phone number transaction (existing functionality):"
+        )
+        entry_mbb_phone = processor.process_transaction(example_mbb_phone)
+        if entry_mbb_phone:
+            print(f"Original: {example_mbb_phone.description}")
+            print(f"Formatted: {entry_mbb_phone.description}")
+            print(f"Counterparty Code: {entry_mbb_phone.counterparty_code}")
+            print(f"Counterparty Name: {entry_mbb_phone.counterparty_name}")
+            print(f"Address: {entry_mbb_phone.address}")
+            print(f"Amount: {entry_mbb_phone.amount1:,.0f}")
+
+        print(
+            "\nProcessing MBB Vietnamese person name transaction (NEW functionality):"
+        )
+        entry_mbb_name = processor.process_transaction(example_mbb_name)
+        if entry_mbb_name:
+            print(f"Original: {example_mbb_name.description}")
+            print(f"Formatted: {entry_mbb_name.description}")
+            print(f"Counterparty Code: {entry_mbb_name.counterparty_code}")
+            print(f"Counterparty Name: {entry_mbb_name.counterparty_name}")
+            print(f"Address: {entry_mbb_name.address}")
+            print(f"Amount: {entry_mbb_name.amount1:,.0f}")
+
+        print(
+            "\nProcessing MBB Vietnamese person name transaction (different pattern):"
+        )
+        entry_mbb_name2 = processor.process_transaction(example_mbb_name2)
+        if entry_mbb_name2:
+            print(f"Original: {example_mbb_name2.description}")
+            print(f"Formatted: {entry_mbb_name2.description}")
+            print(f"Counterparty Code: {entry_mbb_name2.counterparty_code}")
+            print(f"Counterparty Name: {entry_mbb_name2.counterparty_name}")
+            print(f"Address: {entry_mbb_name2.address}")
+            print(f"Amount: {entry_mbb_name2.amount1:,.0f}")
+
+        # Reset bank for VISA test
+        processor.current_bank_name = "VCB"
+        processor.current_bank_info = {}
 
         print("\nProcessing VISA transaction:")
         entry_visa = processor.process_transaction(example_visa)

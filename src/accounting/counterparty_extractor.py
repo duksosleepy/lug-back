@@ -11,7 +11,7 @@ searching in the appropriate index directly.
 """
 
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from src.accounting.fast_search import (
     search_accounts,
@@ -1235,22 +1235,268 @@ class CounterpartyExtractor:
 
         return result
 
+    def extract_loan_account_number(self, description: str) -> Optional[str]:
+        """
+        Extract loan account number (last number) from loan-related descriptions.
+
+        Enhanced to handle different formats including:
+        - "GNOL 1246.20250617 492026129" - extracts 492026129
+        - "TRICH THU TIEN VAY - LAI : 3579090 - ACCT VAY 488972159" - extracts 488972159
+
+        Business rule: For loan-related transactions (TRICH TAI KHOAN, THU NV, GNOL),
+        the last number in the description is typically the loan account number used as counterparty code.
+
+        Args:
+            description: Transaction description
+
+        Returns:
+            The last number found (6+ digits) or None if no suitable number found
+        """
+        if not description:
+            return None
+
+        # Keywords that indicate this is a loan-related transaction
+        loan_keywords = [
+            "TRICH TAI KHOAN",  # Account deduction
+            "TRICH THU TIEN VAY",  # Interest/fee collection from loan
+            "THU NV",  # Interest collection
+            "GNOL",  # Loan disbursement
+            "GIAI NGAN",  # Loan disbursement alternative
+            "VAY",  # General loan keyword
+            "TRA NO",  # Debt repayment
+            "THANH LY VAY",  # Loan liquidation
+        ]
+
+        # Check if this is a loan-related transaction
+        normalized_desc = self._normalize_vietnamese_text(description)
+        is_loan_related = False
+
+        for keyword in loan_keywords:
+            normalized_keyword = self._normalize_vietnamese_text(keyword)
+            if normalized_keyword in normalized_desc:
+                is_loan_related = True
+                self.logger.info(
+                    f"Found loan keyword '{keyword}' in: {description}"
+                )
+                break
+
+        if not is_loan_related:
+            self.logger.debug(f"No loan keywords found in: {description}")
+            return None
+
+        # Special handling for "GNOL" format (example 4)
+        if "GNOL" in description:
+            # Extract the last number in the description after the date part
+            # Pattern: GNOL <date> <account_number>
+            numbers = re.findall(r"\b(\d{9,})\b", description)
+            if numbers:
+                last_number = numbers[-1]  # Get the rightmost number
+                self.logger.info(
+                    f"Extracted GNOL account number '{last_number}' from: {description}"
+                )
+                return last_number
+        
+        # Special handling for "TRICH THU TIEN VAY" format (example 5)
+        if "TRICH THU TIEN VAY" in description or "ACCT VAY" in description:
+            # Try to extract account number after "ACCT VAY" first
+            acct_match = re.search(r"ACCT\s+VAY\s+(\d+)", description)
+            if acct_match:
+                account_number = acct_match.group(1)
+                self.logger.info(
+                    f"Extracted ACCT VAY account number '{account_number}' from: {description}"
+                )
+                return account_number
+        
+        # General case - extract all numbers (6+ digits to avoid dates, small codes)
+        numbers = re.findall(r"\b(\d{6,})\b", description)
+
+        if numbers:
+            last_number = numbers[-1]  # Get the rightmost number
+            self.logger.info(
+                f"Extracted loan account number '{last_number}' from: {description}"
+            )
+            return last_number
+
+        self.logger.debug(f"No suitable last number found in: {description}")
+        return None
+
+    def _normalize_vietnamese_text(self, text: str) -> str:
+        """
+        Normalize Vietnamese text for pattern matching by removing diacritics
+        and converting to uppercase for consistent comparison.
+
+        Args:
+            text: Input Vietnamese text
+
+        Returns:
+            Normalized text with diacritics removed
+        """
+        if not text:
+            return text
+
+        # Convert to uppercase first
+        normalized = text.upper()
+
+        # Vietnamese diacritic removal mapping
+        vietnamese_chars = {
+            "Á": "A",
+            "À": "A",
+            "Ả": "A",
+            "Ã": "A",
+            "Ạ": "A",
+            "Ă": "A",
+            "Ắ": "A",
+            "Ằ": "A",
+            "Ẳ": "A",
+            "Ẵ": "A",
+            "Ặ": "A",
+            "Â": "A",
+            "Ấ": "A",
+            "Ầ": "A",
+            "Ẩ": "A",
+            "Ẫ": "A",
+            "Ậ": "A",
+            "É": "E",
+            "È": "E",
+            "Ẻ": "E",
+            "Ẽ": "E",
+            "Ẹ": "E",
+            "Ê": "E",
+            "Ế": "E",
+            "Ề": "E",
+            "Ể": "E",
+            "Ễ": "E",
+            "Ệ": "E",
+            "Í": "I",
+            "Ì": "I",
+            "Ỉ": "I",
+            "Ĩ": "I",
+            "Ị": "I",
+            "Ó": "O",
+            "Ò": "O",
+            "Ỏ": "O",
+            "Õ": "O",
+            "Ọ": "O",
+            "Ô": "O",
+            "Ố": "O",
+            "Ồ": "O",
+            "Ổ": "O",
+            "Ỗ": "O",
+            "Ộ": "O",
+            "Ơ": "O",
+            "Ớ": "O",
+            "Ờ": "O",
+            "Ở": "O",
+            "Ỡ": "O",
+            "Ợ": "O",
+            "Ú": "U",
+            "Ù": "U",
+            "Ủ": "U",
+            "Ũ": "U",
+            "Ụ": "U",
+            "Ư": "U",
+            "Ứ": "U",
+            "Ừ": "U",
+            "Ử": "U",
+            "Ữ": "U",
+            "Ự": "U",
+            "Ý": "Y",
+            "Ỳ": "Y",
+            "Ỷ": "Y",
+            "Ỹ": "Y",
+            "Ỵ": "Y",
+            "Đ": "D",
+        }
+
+        # Replace Vietnamese characters
+        for vn_char, en_char in vietnamese_chars.items():
+            normalized = normalized.replace(vn_char, en_char)
+
+        return normalized
+
+    def handle_loan_counterparty_logic(
+        self, description: str
+    ) -> Optional[Dict]:
+        """
+        Handle counterparty extraction for loan-related transactions using last number logic.
+
+        Args:
+            description: Transaction description
+
+        Returns:
+            Dictionary with counterparty info (code, name, address) if found, None otherwise
+        """
+        loan_account = self.extract_loan_account_number(description)
+
+        if not loan_account:
+            return None
+
+        self.logger.info(
+            f"Searching counterparty by loan account number: {loan_account}"
+        )
+
+        try:
+            results = search_exact_counterparties(
+                loan_account, field_name="code", limit=1
+            )
+
+            if results and results[0].get("code"):
+                counterparty = results[0]
+                self.logger.info(
+                    f"Found counterparty for loan account '{loan_account}': {counterparty['name']} ({counterparty['code']})"
+                )
+                return {
+                    "code": counterparty["code"],
+                    "name": counterparty["name"],
+                    "address": counterparty.get("address", ""),
+                    "phone": counterparty.get("phone", ""),
+                    "tax_id": counterparty.get("tax_id", ""),
+                    "source": "loan_account_lookup",
+                    "condition_applied": "loan_last_number_logic",
+                    "loan_account_number": loan_account,
+                }
+            else:
+                self.logger.warning(
+                    f"No counterparty found for loan account number: {loan_account}"
+                )
+                return None
+
+        except Exception as e:
+            self.logger.error(
+                f"Error searching counterparty by loan account '{loan_account}': {e}"
+            )
+            return None
+
     def handle_counterparty_with_all_logic(
-        self, extracted_entities: Dict[str, List[Dict]]
+        self, extracted_entities: Dict[str, List[Dict]], description: str = ""
     ) -> Dict[str, any]:
         """
         Unified counterparty handling that includes:
-        1. POS machine logic (if POS machines detected)
-        2. Two-condition logic for regular counterparties
-        3. Fallback to default
+        1. Loan account logic (if loan-related transaction detected)
+        2. POS machine logic (if POS machines detected)
+        3. Two-condition logic for regular counterparties
+        4. Fallback to default
 
         Args:
             extracted_entities: All extracted entities from extract_and_match_all
+            description: Original transaction description for loan logic
 
         Returns:
             Dictionary with final counterparty info
         """
-        # Priority 1: Check for POS machine logic
+        # Priority 1: Check for loan-related transaction logic
+        if description:
+            self.logger.info("Checking for loan-related transaction patterns")
+            loan_result = self.handle_loan_counterparty_logic(description)
+            if loan_result:
+                self.logger.info("Applied loan account counterparty logic")
+                return loan_result
+            else:
+                self.logger.debug(
+                    "No loan pattern detected, continuing with other logic"
+                )
+
+        # Priority 2: Check for POS machine logic
         extracted_pos_machines = extracted_entities.get("pos_machines", [])
         if extracted_pos_machines:
             self.logger.info("Applying POS machine counterparty logic")
@@ -1264,7 +1510,7 @@ class CounterpartyExtractor:
                     "POS machine logic failed, falling back to regular counterparty logic"
                 )
 
-        # Priority 2: Regular counterparty two-condition logic
+        # Priority 3: Regular counterparty two-condition logic
         extracted_counterparties = extracted_entities.get("counterparties", [])
         if extracted_counterparties:
             self.logger.info(
@@ -1274,9 +1520,9 @@ class CounterpartyExtractor:
                 extracted_counterparties
             )
 
-        # Priority 3: Fallback to default
+        # Priority 4: Fallback to default
         self.logger.info(
-            "No counterparties or POS machines found, using default"
+            "No counterparties, POS machines, or loan patterns found, using default"
         )
         return {
             "code": "KL",
@@ -1378,6 +1624,30 @@ class CounterpartyExtractor:
         Returns:
             Dictionary with matched entities from all relevant categories
         """
+        # Special handling for HUYNH THI THANH TAM in descriptions
+        if "HUYNH THI THANH TAM" in description.upper():
+            self.logger.info(f"Found special individual 'HUYNH THI THANH TAM' in description: {description}")
+            # Create a special counterparty entity
+            special_counterparty = {
+                "code": "HTTT",
+                "name": "HUỲNH THỊ THANH TÂM",
+                "address": "D05.3 Tầng 6, C/c An Phú, 959-961-965 Hậu Giang, P.11, Q.6, TP.HCM",
+                "phone": "",
+                "tax_id": "",
+                "extraction_confidence": 1.0,
+                "match_type": "special_person",
+                "search_condition": "special_mapping",
+                "score": 1.0
+            }
+            # Return only this special counterparty
+            return {
+                "counterparties": [special_counterparty],
+                "accounts": [],
+                "pos_machines": [],
+                "departments": []
+            }
+        
+        # Standard processing for other descriptions
         # Extract all entity types from the description
         entity_info = self.extract_entity_info(description)
 
