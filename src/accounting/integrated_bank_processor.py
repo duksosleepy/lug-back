@@ -3451,20 +3451,128 @@ class IntegratedBankProcessor:
             # Removed visa_fee_entries - fees are now added immediately after main entries
 
             for transaction in raw_transactions:
-                # Check if this is a VISA transaction first
-                is_visa = (
-                    "T/t T/ung the VISA:" in transaction.description
-                    and "MerchNo:" in transaction.description
-                )
-
-                # Process the main transaction
+                # Check if this is a VCB transaction that needs special handling
+                if self.current_bank_name == "VCB":
+                    # Import VCB processor functions
+                    from src.accounting.vcb_processor import (
+                        process_vcb_pos_transaction,
+                        process_vcb_transfer_transaction,
+                        process_vcb_interest_transaction,
+                        process_vcb_fee_transaction,
+                        process_generic_vcb_transaction
+                    )
+                    
+                    # Prepare transaction data dictionary
+                    transaction_data = {
+                        "reference": transaction.reference,
+                        "datetime": transaction.datetime,
+                        "debit_amount": transaction.debit_amount,
+                        "credit_amount": transaction.credit_amount,
+                        "balance": transaction.balance,
+                        "description": transaction.description,
+                        "amount1": transaction.credit_amount if transaction.credit_amount > 0 else transaction.debit_amount,
+                        "amount2": transaction.credit_amount if transaction.credit_amount > 0 else transaction.debit_amount,
+                    }
+                    
+                    # Determine which VCB processor to use based on transaction description
+                    processed_records = None
+                    
+                    # Process VCB transactions based on patterns in description
+                    if "INTEREST PAYMENT" in transaction.description:
+                        # Interest payment transaction
+                        processed_records = process_vcb_interest_transaction(transaction.description, transaction_data)
+                        self.logger.info(f"Processed VCB interest payment transaction: {transaction.description[:40]}...")
+                    
+                    elif "THU PHI QLTK TO CHUC-VND" in transaction.description:
+                        # Account management fee transaction
+                        processed_records = process_vcb_fee_transaction(transaction.description, transaction_data)
+                        self.logger.info(f"Processed VCB account management fee transaction: {transaction.description[:40]}...")
+                    
+                    elif "IBVCB" in transaction.description:
+                        # Transfer transaction
+                        processed_records = process_vcb_transfer_transaction(transaction.description, transaction_data)
+                        self.logger.info(f"Processed VCB transfer transaction: {transaction.description[:40]}...")
+                    
+                    elif ("T/t T/ung the VISA:" in transaction.description or 
+                          "T/t T/ung the MASTER:" in transaction.description) and "MerchNo:" in transaction.description:
+                        # Card transaction (VISA or MASTER)
+                        processed_records = process_vcb_pos_transaction(transaction.description, transaction_data)
+                        self.logger.info(f"Processed VCB POS card transaction: {transaction.description[:40]}...")
+                    
+                    # If we processed this transaction with a VCB-specific processor
+                    if processed_records:
+                        # Determine if transaction is credit or debit
+                        is_credit = transaction.credit_amount > 0
+                        document_type = "BC" if is_credit else "BN"
+                        
+                        # Add all processed records to saoke_entries
+                        for idx, record in enumerate(processed_records):
+                            # Generate document number
+                            doc_number = self.generate_document_number(document_type, transaction.datetime)
+                            
+                            # Format date
+                            formatted_date = self.format_date(transaction.datetime)
+                            
+                            # Set accounts if not already set
+                            if not record.get("debit_account") and not record.get("credit_account"):
+                                # Determine accounts based on record type (main or fee)
+                                debit_account, credit_account = self.determine_accounts(
+                                    description=record["description"],
+                                    document_type=document_type,
+                                    is_credit=is_credit,
+                                    transaction_type="FEE" if idx > 0 else None,  # Fee for all records after first
+                                    counterparty_code=record.get("counterparty_code", "")
+                                )
+                            else:
+                                # Use accounts set by the processor
+                                debit_account = record.get("debit_account", "")
+                                credit_account = record.get("credit_account", "")
+                            
+                            # Create entry dictionary
+                            entry_dict = {
+                                "document_type": document_type,
+                                "date": formatted_date,
+                                "document_number": doc_number,
+                                "currency": "VND",
+                                "exchange_rate": 1.0,
+                                "counterparty_code": record.get("counterparty_code", "KL"),
+                                "counterparty_name": record.get("counterparty_name", "Khách Lẻ Không Lấy Hóa Đơn"),
+                                "address": record.get("address", ""),
+                                "description": record["description"],
+                                "original_description": record.get("original_description", transaction.description),
+                                "amount1": record.get("amount1", transaction_data["amount1"]),
+                                "amount2": record.get("amount2", transaction_data["amount2"]),
+                                "debit_account": debit_account,
+                                "credit_account": credit_account,
+                                "cost_code": None,
+                                "department": None,
+                                "sequence": record.get("sequence", idx + 1),
+                                "date2": self.format_date(transaction.datetime, "alt"),
+                                "transaction_type": "FEE" if idx > 0 else None,
+                            }
+                            
+                            # Add entry to saoke_entries
+                            saoke_entries.append(entry_dict)
+                            self.logger.info(f"Added VCB processed record #{idx+1}: {record['description']}")
+                        
+                        # Skip standard processing since we've already handled this transaction
+                        continue
+                
+                # If not processed by VCB-specific processors, process normally
                 entry = self.process_transaction(transaction)
-
+                
                 if entry:
                     saoke_entries.append(entry.as_dict())
-
+                    
+                    # Check if this is a VISA transaction that needs fee processing
+                    is_visa = (
+                        "T/t T/ung the VISA:" in transaction.description
+                        and "MerchNo:" in transaction.description
+                    )
+                    
                     # For VISA transactions, immediately create and add the fee entry
-                    if is_visa:
+                    # This is a fallback for when the VCB processors don't run
+                    if is_visa and self.current_bank_name != "VCB":
                         # Create transaction data dictionary
                         transaction_data = {
                             "reference": transaction.reference,
@@ -3480,30 +3588,31 @@ class IntegratedBankProcessor:
                             if transaction.credit_amount > 0
                             else transaction.debit_amount,
                         }
-
-                        # Get processed records from VISA transaction
-                        processed_records = self.process_visa_transaction(
+                        
+                        # Import and use VISA transaction processor as fallback
+                        from src.accounting.vcb_processor import process_vcb_pos_transaction
+                        processed_records = process_vcb_pos_transaction(
                             transaction.description, transaction_data
                         )
-
+                        
                         # If we have a fee record (second item), create a SaokeEntry for it
                         if len(processed_records) > 1:
                             fee_record = processed_records[1]
-
+                            
                             # Determine if transaction is credit or debit
                             is_credit = transaction.credit_amount > 0
                             document_type = "BC" if is_credit else "BN"
-
+                            
                             # Generate document number
                             fee_doc_number = self.generate_document_number(
                                 document_type, transaction.datetime
                             )
-
+                            
                             # Format the date
                             formatted_date = self.format_date(
                                 transaction.datetime
                             )
-
+                            
                             # Determine accounts for fee record
                             fee_debit_account, fee_credit_account = (
                                 self.determine_accounts(
@@ -3516,7 +3625,7 @@ class IntegratedBankProcessor:
                                     ),
                                 )
                             )
-
+                            
                             # Create fee entry dictionary
                             fee_entry_dict = {
                                 "document_type": document_type,
@@ -3534,23 +3643,23 @@ class IntegratedBankProcessor:
                                 "address": fee_record.get("address", ""),
                                 "description": fee_record["description"],
                                 "original_description": transaction.description,
-                                "amount1": fee_record["Tien"],
-                                "amount2": fee_record["Tien"],
+                                "amount1": fee_record["amount1"],
+                                "amount2": fee_record["amount2"],
                                 "debit_account": fee_debit_account,
                                 "credit_account": fee_credit_account,
                                 "cost_code": None,
                                 "department": None,
-                                "sequence": 1,
+                                "sequence": 2,
                                 "date2": self.format_date(
                                     transaction.datetime, "alt"
                                 ),
                                 "transaction_type": "FEE",
                             }
-
+                            
                             # Add fee entry immediately after main entry
                             saoke_entries.append(fee_entry_dict)
                             self.logger.info(
-                                f"Added VISA fee entry immediately after main entry: {fee_record['description']} with amount {fee_record['Tien']}"
+                                f"Added VISA fee entry as fallback: {fee_record['description']}"
                             )
 
             # Create output DataFrame

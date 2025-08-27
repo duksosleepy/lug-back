@@ -945,6 +945,17 @@ async def process_bank_statement(file: UploadFile):
                                     "Using hardcoded mapping for account 3840"
                                 )
                                 processor.default_bank_account = "1121115"  # Use a different account than default
+                                
+                # Make sure VCB bank name is set if filename contains VCB
+                if file and file.filename and ("VCB" in file.filename.upper() or "VIETCOMBANK" in file.filename.upper()):
+                    logger.info(f"Setting bank to VCB based on filename: {file.filename}")
+                    processor.current_bank_name = "VCB"
+                    processor.current_bank_info = {
+                        "code": "VCB",
+                        "name": "NGÂN HÀNG TMCP NGOẠI THƯƠNG VIỆT NAM",
+                        "short_name": "VCB",
+                        "address": "198 Trần Quang Khải, Hoàn Kiếm, Hà Nội"
+                    }
 
                 # Step 3: Now that we have the transactions_df, use the processor to determine
                 # accounts and create SaokeEntry objects
