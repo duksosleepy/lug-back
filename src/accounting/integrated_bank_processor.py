@@ -3491,6 +3491,7 @@ class IntegratedBankProcessor:
                         "amount2": transaction.credit_amount
                         if transaction.credit_amount > 0
                         else transaction.debit_amount,
+                        "bank_account": self.default_bank_account,  # Add bank account for VCB processing
                     }
 
                     # Determine which VCB processor to use based on transaction description

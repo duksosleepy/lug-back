@@ -210,14 +210,15 @@ def process_vcb_pos_transaction(
         fee_account = "6427"  # Use 6427 for other card types (MASTER, etc.)
 
     # Assign accounts based on transaction direction
+    # For fee records, 1311 should be in the credit account (Tk_Co), not debit account (Tk_No)
     if transaction_data.get("debit_amount", 0) > 0:
         # For debit transactions (money going out)
         fee_record["debit_account"] = fee_account  # Debit the fee account
         fee_record["credit_account"] = "1311"  # Credit account 1311
     else:
         # For credit transactions (money coming in)
-        fee_record["credit_account"] = fee_account  # Credit the fee account
-        fee_record["debit_account"] = "1311"  # Debit account 1311
+        fee_record["debit_account"] = fee_account  # Debit the fee account
+        fee_record["credit_account"] = "1311"  # Credit account 1311
 
     logger.info(
         f"Set fee record accounts: Dr={fee_record.get('debit_account')}, Cr={fee_record.get('credit_account')}"
@@ -294,6 +295,9 @@ def process_vcb_transfer_transaction(
     """
     logger.info(f"Processing VCB transfer transaction: {description}")
 
+    # Check if we have a bank account from the current file
+    bank_account = transaction_data.get("bank_account", "1121114")  # Default if not provided
+
     # Create main record
     main_record = transaction_data.copy()
     main_record["sequence"] = 1
@@ -302,21 +306,39 @@ def process_vcb_transfer_transaction(
     # Format the description for Sang Tam transfers
     if "SANG TAM" in description.upper():
         # Pattern for transfers between accounts
-        pattern = r"tu\s+tk\s+(\w+)\s*\((\d+)\)\s+sang\s+tam.*?qua\s+tk\s+(\w+)\s*\((\d+)\)\s+sang\s+tam"
+        # More flexible pattern that works with both parentheses and space formats
+        pattern = r"tu\s+tk\s+([A-Z]+).*?(\d+).*?sang\s+tam.*?qua\s+tk\s+([A-Z]+).*?(\d+).*?sang\s+tam"
         match = re.search(pattern, description, re.IGNORECASE)
-
+        
         if match:
             from_bank = match.group(1)
             from_account = match.group(2)
             to_bank = match.group(3)
             to_account = match.group(4)
-
+            
             formatted_desc = f"Chuyển tiền từ TK {from_bank} ({from_account}) Sáng Tâm qua TK {to_bank} ({to_account}) Sáng Tâm"
             main_record["description"] = formatted_desc
         else:
             main_record["description"] = description
     else:
         main_record["description"] = description
+
+    # According to business requirements:
+    # For VCB file, if statement like "IBVCB.1706250930138002.034244.IBTC.Chuyen tien tu TK VCB (6868) Sang Tam qua TK BIDV (7655) Sang Tam", 
+    # please the debit/credit of main record is 1131 and the bank of current file
+    # Example: 1131 and 1121120
+    
+    # Set appropriate accounts for main record based on business requirements
+    if main_record.get("debit_amount", 0) > 0:
+        # Debit transaction: money going out
+        # Debit account should be 1131, credit account should be the bank account
+        main_record["debit_account"] = "1131"
+        main_record["credit_account"] = bank_account
+    else:
+        # Credit transaction: money coming in
+        # Debit account should be the bank account, credit account should be 1131
+        main_record["debit_account"] = bank_account
+        main_record["credit_account"] = "1131"
 
     # Create fee record
     fee_record = transaction_data.copy()
@@ -331,7 +353,7 @@ def process_vcb_transfer_transaction(
     fee_record["description"] = f"Phí chuyển tiền ST: {amount:,.0f}"
 
     # Set fee amount (try to extract from description or use default)
-    vat_match = re.search(r"VAT Amt:([0-9,]+\.[0-9]+)", description)
+    vat_match = re.search(r"VAT Amt:([0-9,]+\\.[0-9]+)", description)
     if vat_match:
         vat_amount_str = vat_match.group(1)
         vat_amount = float(vat_amount_str.replace(",", ""))
@@ -362,30 +384,39 @@ def process_vcb_transfer_transaction(
             fee_record["amount1"] = fee_amount
             fee_record["amount2"] = fee_amount
 
-    # UPDATED: Set fee accounts according to new requirements
-    # For fee records, use 6417 for VISA or 6427 for other types, remaining account is 1311
-    fee_account = "6427"  # Default to 6427 for transfer fees
-    if "VISA" in description:
-        fee_account = "6417"  # Use 6417 for VISA-related transfers
-
-    # Assign accounts based on transaction direction
+    # According to business requirements:
+    # For VCB file, if statement like "IBVCB...", 
+    # please the debit/credit of fee record is 6427 and the bank of current file
+    # Example: 6427 and 1121120
+    
+    # Set appropriate accounts for fee record based on business requirements
     if transaction_data.get("debit_amount", 0) > 0:
-        # For debit transactions (money going out)
-        fee_record["debit_account"] = fee_account  # Debit the fee account
-        fee_record["credit_account"] = "1311"  # Credit account 1311
+        # Debit transaction: money going out (fee payment)
+        # Debit account should be 6427, credit account should be the bank account
+        fee_record["debit_account"] = "6427"
+        fee_record["credit_account"] = bank_account
     else:
-        # For credit transactions (money coming in)
-        fee_record["credit_account"] = fee_account  # Credit the fee account
-        fee_record["debit_account"] = "1311"  # Debit account 1311
+        # Credit transaction: money coming in (fee received - less common)
+        # Debit account should be the bank account, credit account should be 6427
+        fee_record["debit_account"] = bank_account
+        fee_record["credit_account"] = "6427"
 
+    logger.info(
+        f"Set transfer main accounts: Dr={main_record.get('debit_account')}, Cr={main_record.get('credit_account')}"
+    )
     logger.info(
         f"Set transfer fee accounts: Dr={fee_record.get('debit_account')}, Cr={fee_record.get('credit_account')}"
     )
 
-    # Set fee counterparty to bank
-    fee_record["counterparty_code"] = "VCB"
-    fee_record["counterparty_name"] = "NGÂN HÀNG TMCP NGOẠI THƯƠNG VIỆT NAM"
-    fee_record["address"] = "198 Trần Quang Khải, Hoàn Kiếm, Hà Nội"
+    # According to business requirements:
+    # For VCB file, if statement like "IBVCB...", 
+    # with statement the code, name and address is {"31754", "Công Ty TNHH Sáng Tâm","32-34 Đường 74, Phường 10, Quận 6, Tp. Hồ Chí Minh"}
+    # (Sáng Tâm company info)
+    
+    # Set fee counterparty to Sáng Tâm company
+    fee_record["counterparty_code"] = "31754"
+    fee_record["counterparty_name"] = "Công Ty TNHH Sáng Tâm"
+    fee_record["address"] = "32-34 Đường 74, Phường 10, Quận 6, Tp. Hồ Chí Minh"
 
     return [main_record, fee_record]
 
@@ -421,13 +452,25 @@ def process_vcb_interest_transaction(
     record["counterparty_name"] = "NGÂN HÀNG TMCP NGOẠI THƯƠNG VIỆT NAM"
     record["address"] = "198 Trần Quang Khải, Hoàn Kiếm, Hà Nội"
 
-    # Set appropriate accounts (assume interest income is credited)
+    # According to business requirements:
+    # For VCB file, if statement is "INTEREST PAYMENT", 
+    # please the debit/credit account is the bank of current file and 5154
+    # Example: 1121120 and 5154
+    
+    # Check if we have a bank account from the current file
+    bank_account = transaction_data.get("bank_account", "1121114")  # Default if not provided
+    
+    # Set appropriate accounts based on business requirements
     if record.get("credit_amount", 0) > 0:
-        record["credit_account"] = "811"  # Interest income account
-        record["debit_account"] = "1121114"  # Default bank account
+        # Credit transaction: money coming in (interest payment received)
+        # Debit account should be the bank account, credit account should be 5154
+        record["debit_account"] = bank_account
+        record["credit_account"] = "5154"
     else:
-        record["debit_account"] = "811"  # Interest income account
-        record["credit_account"] = "1121114"  # Default bank account
+        # Debit transaction: money going out (interest payment made)
+        # Debit account should be 5154, credit account should be the bank account
+        record["debit_account"] = "5154"
+        record["credit_account"] = bank_account
 
     return [record]
 
@@ -463,13 +506,25 @@ def process_vcb_fee_transaction(
     record["counterparty_name"] = "NGÂN HÀNG TMCP NGOẠI THƯƠNG VIỆT NAM"
     record["address"] = "198 Trần Quang Khải, Hoàn Kiếm, Hà Nội"
 
-    # Set appropriate accounts (assume fee is debited)
+    # According to business requirements:
+    # For VCB file, if statement is "THU PHI QLTK TO CHUC-VND", 
+    # please the debit/credit account is 6427 and the bank of current file
+    # Example: 6427 and 1121120
+    
+    # Check if we have a bank account from the current file
+    bank_account = transaction_data.get("bank_account", "1121114")  # Default if not provided
+    
+    # Set appropriate accounts based on business requirements
     if record.get("debit_amount", 0) > 0:
-        record["debit_account"] = "6417"  # Fee expense account
-        record["credit_account"] = "1121114"  # Default bank account
+        # Debit transaction: money going out (fee payment)
+        # Debit account should be 6427, credit account should be the bank account
+        record["debit_account"] = "6427"
+        record["credit_account"] = bank_account
     else:
-        record["credit_account"] = "6417"  # Fee expense account
-        record["debit_account"] = "1121114"  # Default bank account
+        # Credit transaction: money coming in (fee received - less common)
+        # Debit account should be the bank account, credit account should be 6427
+        record["debit_account"] = bank_account
+        record["credit_account"] = "6427"
 
     return [record]
 
@@ -570,14 +625,15 @@ def process_generic_vcb_transaction(
         fee_account = "6417"  # Use 6417 for VISA transactions
 
     # Assign accounts based on transaction direction
+    # For fee records, 1311 should be in the credit account (Tk_Co), not debit account (Tk_No)
     if transaction_data.get("debit_amount", 0) > 0:
         # For debit transactions (money going out)
         fee_record["debit_account"] = fee_account  # Debit the fee account
         fee_record["credit_account"] = "1311"  # Credit account 1311
     else:
         # For credit transactions (money coming in)
-        fee_record["credit_account"] = fee_account  # Credit the fee account
-        fee_record["debit_account"] = "1311"  # Debit account 1311
+        fee_record["debit_account"] = fee_account  # Debit the fee account
+        fee_record["credit_account"] = "1311"  # Credit account 1311
 
     logger.info(
         f"Set generic transaction fee accounts: Dr={fee_record.get('debit_account')}, Cr={fee_record.get('credit_account')}"
