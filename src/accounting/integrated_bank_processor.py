@@ -2725,6 +2725,22 @@ class IntegratedBankProcessor:
                 "counterparties", []
             )
 
+            # NEW BUSINESS LOGIC: For all banks, for BC statements (credit transactions),
+            # after searching and getting results in the counterparties index by code,
+            # filter the results to only include counterparties whose code contains "KL"
+            # to identify the final counterparty
+            if rule.document_type == "BC" and extracted_counterparties:
+                filtered_counterparties = [
+                    cp for cp in extracted_counterparties 
+                    if cp.get("code") and "KL" in str(cp["code"])
+                ]
+                # Only use filtered results if we found any counterparties with "KL" in their code
+                if filtered_counterparties:
+                    extracted_counterparties = filtered_counterparties
+                    self.logger.info(
+                        f"Filtered counterparties for BC transaction: kept {len(filtered_counterparties)} out of {len(extracted_counterparties)} that contain 'KL' in code"
+                    )
+
             # **PRIORITY 0 (HIGHEST): MBB Detection for Online Transactions**
             # Check if current bank is MBB and transaction description contains phone number OR Vietnamese person name
             if (

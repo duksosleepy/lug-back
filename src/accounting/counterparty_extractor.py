@@ -69,8 +69,9 @@ class CounterpartyExtractor:
         self.department_code_replacements = {
             "BRVT": "BARIA",
             "CTHO": "CANTHO",
-            "PSHV 2F18": "PSHV",
-            "LUG.08NTRAI": "LUG08NTRAI",
+            "PSHV2F18": "PSHV",
+            "08NTRAI": "LUG08NTRAI",
+            "LDH": "LUGLDH",
             # Add more mappings here in the future as needed
             # "SHORT": "FULL_NAME",
         }
