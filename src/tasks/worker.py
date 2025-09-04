@@ -24,7 +24,7 @@ celery_app = Celery(
     app_settings.app_name,
     broker=f"{REDIS_URL}/0",
     backend=f"{REDIS_URL}/1",
-    include=["src.tasks.worker"],
+    include=["src.tasks.worker", "src.crm.tasks"],
 )
 
 # Cấu hình Celery
@@ -39,6 +39,11 @@ celery_app.conf.update(
         "daily-sapo-sync": {
             "task": "src.tasks.worker.daily_sapo_sync",
             "schedule": crontab(hour=0, minute=30),
+            "args": (),
+        },
+        "crm-data-sync": {
+            "task": "src.crm.tasks.sync_crm_data",
+            "schedule": crontab(hour=5, minute=0),  # Run at 5:00 AM daily
             "args": (),
         },
     },

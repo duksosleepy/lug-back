@@ -69,6 +69,8 @@ class CounterpartyExtractor:
         self.department_code_replacements = {
             "BRVT": "BARIA",
             "CTHO": "CANTHO",
+            "PSHV 2F18": "PSHV",
+            "LUG.08NTRAI": "LUG08NTRAI",
             # Add more mappings here in the future as needed
             # "SHORT": "FULL_NAME",
         }
@@ -1295,7 +1297,7 @@ class CounterpartyExtractor:
                     f"Extracted GNOL account number '{last_number}' from: {description}"
                 )
                 return last_number
-        
+
         # Special handling for "TRICH THU TIEN VAY" format (example 5)
         if "TRICH THU TIEN VAY" in description or "ACCT VAY" in description:
             # Try to extract account number after "ACCT VAY" first
@@ -1306,7 +1308,7 @@ class CounterpartyExtractor:
                     f"Extracted ACCT VAY account number '{account_number}' from: {description}"
                 )
                 return account_number
-        
+
         # General case - extract all numbers (6+ digits to avoid dates, small codes)
         numbers = re.findall(r"\b(\d{6,})\b", description)
 
@@ -1626,7 +1628,9 @@ class CounterpartyExtractor:
         """
         # Special handling for HUYNH THI THANH TAM in descriptions
         if "HUYNH THI THANH TAM" in description.upper():
-            self.logger.info(f"Found special individual 'HUYNH THI THANH TAM' in description: {description}")
+            self.logger.info(
+                f"Found special individual 'HUYNH THI THANH TAM' in description: {description}"
+            )
             # Create a special counterparty entity
             special_counterparty = {
                 "code": "HTTT",
@@ -1637,16 +1641,16 @@ class CounterpartyExtractor:
                 "extraction_confidence": 1.0,
                 "match_type": "special_person",
                 "search_condition": "special_mapping",
-                "score": 1.0
+                "score": 1.0,
             }
             # Return only this special counterparty
             return {
                 "counterparties": [special_counterparty],
                 "accounts": [],
                 "pos_machines": [],
-                "departments": []
+                "departments": [],
             }
-        
+
         # Standard processing for other descriptions
         # Extract all entity types from the description
         entity_info = self.extract_entity_info(description)

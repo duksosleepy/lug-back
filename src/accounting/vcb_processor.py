@@ -60,26 +60,32 @@ def process_vcb_pos_transaction(
     mid = mid_match.group(1)
 
     # 2. Extract VAT amount for fee record
-    # First try to extract VAT amount after the equals sign (format: VAT Amt:89,925.00/11 = 8,175.00)
-    vat_match = re.search(
-        r"VAT Amt:.*?/11\s*=\s*([0-9,]+\.[0-9]+)", description
-    )
-    if not vat_match:
-        # If not found, try the simpler format (VAT Amt:89,925.00)
-        vat_match = re.search(r"VAT Amt:([0-9,]+\.[0-9]+)", description)
-        if not vat_match:
+    # UPDATED LOGIC: For VISA/MASTER transactions, extract the VAT amount that appears before the '/' symbol
+    # Example: "VAT Amt:89,925.00/11 = 8,175.00" should extract 89,925.00
+    vat_amount = 0
+    vat_match = re.search(r"VAT Amt:([0-9,]+\.?[0-9]*)/", description)
+    if vat_match:
+        # Parse VAT amount (value before the '/' symbol)
+        vat_amount_str = vat_match.group(1)
+        vat_amount = float(vat_amount_str.replace(",", ""))
+        logger.info(
+            f"Extracted VAT amount (before '/'): {vat_amount} from description"
+        )
+    else:
+        # Fallback to older patterns - try without the division symbol
+        vat_match = re.search(r"VAT Amt:([0-9,]+\.?[0-9]*)", description)
+        if vat_match:
+            # Parse VAT amount
+            vat_amount_str = vat_match.group(1)
+            vat_amount = float(vat_amount_str.replace(",", ""))
+            logger.info(
+                f"Extracted VAT amount: {vat_amount} from description using fallback pattern"
+            )
+        else:
             logger.warning(
                 f"Failed to extract VAT amount from VCB POS transaction: {description}"
             )
             vat_amount = 0
-        else:
-            # Parse VAT amount
-            vat_amount_str = vat_match.group(1)
-            vat_amount = float(vat_amount_str.replace(",", ""))
-    else:
-        # Parse VAT amount (value after "=" sign)
-        vat_amount_str = vat_match.group(1)
-        vat_amount = float(vat_amount_str.replace(",", ""))
 
     # 3. Search for MID in vcb_mids index
     from src.accounting.fast_search import search_vcb_mids
@@ -166,7 +172,7 @@ def process_vcb_pos_transaction(
     fee_record["original_description"] = description
     fee_record["sequence"] = 2
 
-    # Set fee amount from VAT amount
+    # Set the fee amount using the extracted VAT amount
     if vat_amount > 0:
         if transaction_data.get("debit_amount", 0) > 0:
             fee_record["debit_amount"] = vat_amount
@@ -176,12 +182,46 @@ def process_vcb_pos_transaction(
             fee_record["credit_amount"] = vat_amount
             fee_record["amount1"] = vat_amount
             fee_record["amount2"] = vat_amount
-
-    # Set fee account to 6417
-    if main_record.get("debit_amount", 0) > 0:
-        fee_record["credit_account"] = "6417"
     else:
-        fee_record["debit_account"] = "6417"
+        logger.warning(
+            "Using default fee calculation as VAT amount extraction failed"
+        )
+        # Default fee calculation as fallback
+        if transaction_data.get("debit_amount", 0) > 0:
+            fee_amount = (
+                transaction_data["debit_amount"] * 0.001
+            )  # 0.1% of transaction amount
+            fee_record["debit_amount"] = fee_amount
+            fee_record["amount1"] = fee_amount
+            fee_record["amount2"] = fee_amount
+        else:
+            fee_amount = (
+                transaction_data["credit_amount"] * 0.001
+            )  # 0.1% of transaction amount
+            fee_record["credit_amount"] = fee_amount
+            fee_record["amount1"] = fee_amount
+            fee_record["amount2"] = fee_amount
+
+    # UPDATED: Set fee accounts according to new requirements
+    # debit/credit account is 6417 for VISA or 6427 for other types, remaining account is 1311
+    if card_type == "VISA":
+        fee_account = "6417"  # Use 6417 for VISA transactions
+    else:
+        fee_account = "6427"  # Use 6427 for other card types (MASTER, etc.)
+
+    # Assign accounts based on transaction direction
+    if transaction_data.get("debit_amount", 0) > 0:
+        # For debit transactions (money going out)
+        fee_record["debit_account"] = fee_account  # Debit the fee account
+        fee_record["credit_account"] = "1311"  # Credit account 1311
+    else:
+        # For credit transactions (money coming in)
+        fee_record["credit_account"] = fee_account  # Credit the fee account
+        fee_record["debit_account"] = "1311"  # Debit account 1311
+
+    logger.info(
+        f"Set fee record accounts: Dr={fee_record.get('debit_account')}, Cr={fee_record.get('credit_account')}"
+    )
 
     # 8. Use the processed code to find counterparty
     from src.accounting.fast_search import search_exact_counterparties
@@ -322,11 +362,25 @@ def process_vcb_transfer_transaction(
             fee_record["amount1"] = fee_amount
             fee_record["amount2"] = fee_amount
 
-    # Set fee account to 6427 for transfers
-    if main_record.get("debit_amount", 0) > 0:
-        fee_record["credit_account"] = "6427"
+    # UPDATED: Set fee accounts according to new requirements
+    # For fee records, use 6417 for VISA or 6427 for other types, remaining account is 1311
+    fee_account = "6427"  # Default to 6427 for transfer fees
+    if "VISA" in description:
+        fee_account = "6417"  # Use 6417 for VISA-related transfers
+
+    # Assign accounts based on transaction direction
+    if transaction_data.get("debit_amount", 0) > 0:
+        # For debit transactions (money going out)
+        fee_record["debit_account"] = fee_account  # Debit the fee account
+        fee_record["credit_account"] = "1311"  # Credit account 1311
     else:
-        fee_record["debit_account"] = "6427"
+        # For credit transactions (money coming in)
+        fee_record["credit_account"] = fee_account  # Credit the fee account
+        fee_record["debit_account"] = "1311"  # Debit account 1311
+
+    logger.info(
+        f"Set transfer fee accounts: Dr={fee_record.get('debit_account')}, Cr={fee_record.get('credit_account')}"
+    )
 
     # Set fee counterparty to bank
     fee_record["counterparty_code"] = "VCB"
@@ -463,63 +517,71 @@ def process_generic_vcb_transaction(
     fee_record["description"] = "Phí giao dịch ngân hàng"
 
     # Try to extract VAT amount for fee record
-    # First try to extract VAT amount after the equals sign (format: VAT Amt:89,925.00/11 = 8,175.00)
-    vat_match = re.search(
-        r"VAT Amt:.*?/11\s*=\s*([0-9,]+\.[0-9]+)", description
-    )
-    if not vat_match:
-        # If not found, try the simpler format (VAT Amt:89,925.00)
-        vat_match = re.search(r"VAT Amt:([0-9,]+\.[0-9]+)", description)
-
+    # UPDATED: Try to extract VAT amount before the division symbol first
+    vat_match = re.search(r"VAT Amt:([0-9,]+\.?[0-9]*)/", description)
     if vat_match:
-        # Parse VAT amount
+        # Parse VAT amount (value before the '/' symbol)
         vat_amount_str = vat_match.group(1)
         vat_amount = float(vat_amount_str.replace(",", ""))
-        logger.info(f"Extracted VAT amount: {vat_amount} from description")
-
-        # Set fee amount from VAT amount
-        if transaction_data.get("debit_amount", 0) > 0:
-            fee_record["debit_amount"] = vat_amount
-            fee_record["amount1"] = vat_amount
-            fee_record["amount2"] = vat_amount
-        else:
-            fee_record["credit_amount"] = vat_amount
-            fee_record["amount1"] = vat_amount
-            fee_record["amount2"] = vat_amount
+        logger.info(
+            f"Extracted VAT amount (before '/'): {vat_amount} from description"
+        )
     else:
-        # If no VAT amount found, use a small percentage of the transaction amount
-        if transaction_data.get("debit_amount", 0) > 0:
-            fee_amount = (
-                transaction_data["debit_amount"] * 0.001
-            )  # 0.1% of transaction amount
-            fee_record["debit_amount"] = fee_amount
-            fee_record["amount1"] = fee_amount
-            fee_record["amount2"] = fee_amount
-        else:
-            fee_amount = (
-                transaction_data["credit_amount"] * 0.001
-            )  # 0.1% of transaction amount
-            fee_record["credit_amount"] = fee_amount
-            fee_record["amount1"] = fee_amount
-            fee_record["amount2"] = fee_amount
+        # If not found, try the simpler format (VAT Amt:89,925.00)
+        vat_match = re.search(r"VAT Amt:([0-9,]+\.?[0-9]*)", description)
 
-    # Set fee account based on transaction type
-    if (
-        "CHUYEN TIEN" in description.upper()
-        or "TRANSFER" in description.upper()
-        or "IBVCB" in description
-    ):
-        # Use 6427 for transfers
-        if main_record.get("debit_amount", 0) > 0:
-            fee_record["credit_account"] = "6427"
+        if vat_match:
+            # Parse VAT amount
+            vat_amount_str = vat_match.group(1)
+            vat_amount = float(vat_amount_str.replace(",", ""))
+            logger.info(
+                f"Extracted VAT amount: {vat_amount} from description using fallback pattern"
+            )
         else:
-            fee_record["debit_account"] = "6427"
+            # If no VAT amount found, use a small percentage of the transaction amount
+            logger.warning(
+                "No VAT amount found in description, using calculated fee"
+            )
+            if transaction_data.get("debit_amount", 0) > 0:
+                vat_amount = (
+                    transaction_data["debit_amount"] * 0.001
+                )  # 0.1% of transaction amount
+            else:
+                vat_amount = (
+                    transaction_data["credit_amount"] * 0.001
+                )  # 0.1% of transaction amount
+
+    # Set fee amount from VAT amount
+    if transaction_data.get("debit_amount", 0) > 0:
+        fee_record["debit_amount"] = vat_amount
+        fee_record["amount1"] = vat_amount
+        fee_record["amount2"] = vat_amount
     else:
-        # Use 6417 for other transactions
-        if main_record.get("debit_amount", 0) > 0:
-            fee_record["credit_account"] = "6417"
-        else:
-            fee_record["debit_account"] = "6417"
+        fee_record["credit_amount"] = vat_amount
+        fee_record["amount1"] = vat_amount
+        fee_record["amount2"] = vat_amount
+
+    # UPDATED: Set fee accounts according to new requirements
+    # For fee records, use 6417 for VISA or 6427 for other types, remaining account is 1311
+    fee_account = "6427"  # Default for generic transactions
+
+    # Check for VISA-related transactions
+    if "VISA" in description:
+        fee_account = "6417"  # Use 6417 for VISA transactions
+
+    # Assign accounts based on transaction direction
+    if transaction_data.get("debit_amount", 0) > 0:
+        # For debit transactions (money going out)
+        fee_record["debit_account"] = fee_account  # Debit the fee account
+        fee_record["credit_account"] = "1311"  # Credit account 1311
+    else:
+        # For credit transactions (money coming in)
+        fee_record["credit_account"] = fee_account  # Credit the fee account
+        fee_record["debit_account"] = "1311"  # Debit account 1311
+
+    logger.info(
+        f"Set generic transaction fee accounts: Dr={fee_record.get('debit_account')}, Cr={fee_record.get('credit_account')}"
+    )
 
     # Set fee counterparty to bank
     fee_record["counterparty_code"] = "VCB"
