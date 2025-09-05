@@ -206,6 +206,15 @@ class IntegratedBankProcessor:
 
         # Transfer patterns to identify source and destination
         self.transfer_patterns = [
+            # Sang Tam transfer patterns with bank names and account numbers
+            (
+                r"tu\s+tk\s+([A-Z]+)\s*\(\s*(\d+)\s*\)\s+sang\s+tam.*?qua\s+tk\s+([A-Z]+)\s*\(\s*(\d+)\s*\)\s+sang\s+tam",
+                "sang_tam_from_to",
+            ),
+            (
+                r"tu\s+tk\s+([A-Z]+)\s+(\d+)\s+sang\s+tam.*?qua\s+tk\s+([A-Z]+)\s+(\d+)\s+sang\s+tam",
+                "sang_tam_from_to",
+            ),
             # "from account X to account Y" patterns
             (
                 r"tu\s+(?:TK\s+)?(?:BIDV\s+)?(\d+).*?(?:qua|sang|den)\s+(?:TK\s+)?(?:BIDV\s+)?(\d+)",
@@ -1036,7 +1045,32 @@ class IntegratedBankProcessor:
         for pattern, pattern_type in self.transfer_patterns:
             match = re.search(pattern, description, re.IGNORECASE)
             if match:
-                if pattern_type == "from_to":
+                if pattern_type == "sang_tam_from_to":
+                    # Pattern captures bank name and account number for both from and to
+                    # Group 1: from bank, Group 2: from account, Group 3: to bank, Group 4: to account
+                    from_bank = match.group(1)
+                    from_account = match.group(2)
+                    to_bank = match.group(3)
+                    to_account = match.group(4)
+
+                    # Find corresponding accounts using the account numbers
+                    from_match = self.find_account_by_code(from_account)
+                    to_match = self.find_account_by_code(to_account)
+
+                    if from_match:
+                        info.from_account = from_match.code
+                    if to_match:
+                        info.to_account = to_match.code
+
+                    self.logger.info(
+                        f"Sang Tam transfer detected: {from_bank} ({from_account}) -> {to_bank} ({to_account})"
+                    )
+                    self.logger.info(
+                        f"Accounts mapped: {info.from_account} -> {info.to_account}"
+                    )
+                    break
+
+                elif pattern_type == "from_to":
                     # Pattern captures both from and to
                     info.from_code = match.group(1)
                     info.to_code = match.group(2)
@@ -1895,9 +1929,6 @@ class IntegratedBankProcessor:
         # Extract all numeric codes
         codes = self.extract_numeric_codes(description)
 
-        if not codes:
-            return None, None
-
         # Check if this is a transfer transaction
         if (
             "chuyen" in description.lower()
@@ -1924,6 +1955,9 @@ class IntegratedBankProcessor:
                         transfer_info.to_account,
                         None,
                     )  # Debit the destination
+
+        if not codes:
+            return None, None
 
         # For non-transfer transactions, find accounts by codes
         matched_accounts = []
@@ -3246,6 +3280,26 @@ class IntegratedBankProcessor:
                     self.logger.info(
                         f"Applied Sang Tam transfer formatting: {description}"
                     )
+                    
+                    # For Sang Tam transfers, determine the proper accounts
+                    transfer_info = self.extract_transfer_info(transaction.description)
+                    if transfer_info.from_account and transfer_info.to_account:
+                        # For transfer transactions, we need to determine the proper accounting treatment
+                        # Based on the document type and business rules:
+                        if rule.document_type == "BC":  # Receipt
+                            # For receipts: money comes into the destination account
+                            # But for transfer receipts, the credit should be accounts receivable (1311)
+                            debit_account = transfer_info.to_account
+                            credit_account = "1311"  # Accounts receivable for transfer receipts
+                        else:  # BN - Payment
+                            # For payments: money goes out from the source account
+                            # For transfer payments, the debit should be accounts payable (3311) or expense
+                            debit_account = "3311"  # Other expenses for transfer payments
+                            credit_account = transfer_info.from_account
+                        
+                        self.logger.info(
+                            f"Set Sang Tam transfer accounts: Dr={debit_account}, Cr={credit_account}"
+                        )
                 else:
                     # Fallback to original description if formatting failed
                     description = transaction.description
@@ -3291,9 +3345,18 @@ class IntegratedBankProcessor:
                 # Process specific loan-related patterns for description formatting
                 if "TRICH TAI KHOAN" in transaction.description.upper():
                     # Extract the account number from the description
+                    # Updated pattern to handle "TK VAY" at the end of the description
                     account_match = re.search(
-                        r"TK VAY (\d+)", transaction.description.upper()
+                        r"(?:TK VAY|THANH LY TK VAY|TK VAY THU NO TRUOC HAN) (\d+)", transaction.description.upper()
                     )
+                    # Fallback pattern to extract the last number if the above doesn't match
+                    if not account_match:
+                        # Extract all numbers and take the last one for TRICH TAI KHOAN patterns
+                        numbers = re.findall(r"\b(\d{6,})\b", transaction.description)
+                        if numbers:
+                            account_number = numbers[-1]
+                            account_match = type('MockMatch', (), {'group': lambda x, num=account_number: num})()
+                    
                     if account_match:
                         account_number = account_match.group(1)
 
@@ -3326,16 +3389,39 @@ class IntegratedBankProcessor:
                     if account_match:
                         account_number = account_match.group(1)
                         description = f"Trả lãi vay KU {account_number}"
+                        # Set account to 6354
+                        if rule.document_type == "BC":  # Receipt
+                            debit_account = self.default_bank_account
+                            credit_account = "6354"
+                        else:  # Payment
+                            debit_account = "6354"
+                            credit_account = self.default_bank_account
                     else:
                         description = transaction.description
                 elif "GNOL" in transaction.description.upper():
                     # Extract the account number
+                    # Updated pattern to better handle GNOL format
                     account_match = re.search(
                         r"GNOL \S+\s+(\d+)", transaction.description.upper()
                     )
+                    # Fallback to extract last number if specific pattern doesn't match
+                    if not account_match:
+                        # Extract all numbers and take the last one for GNOL patterns
+                        numbers = re.findall(r"\b(\d{9,})\b", transaction.description)
+                        if numbers:
+                            account_number = numbers[-1]
+                            account_match = type('MockMatch', (), {'group': lambda x, num=account_number: num})()
+                    
                     if account_match:
                         account_number = account_match.group(1)
                         description = f"Nhận giải ngân HĐGN {account_number}"
+                        # Set account to 34111 for GNOL transactions
+                        if rule.document_type == "BC":  # Receipt
+                            debit_account = self.default_bank_account
+                            credit_account = "34111"
+                        else:  # Payment
+                            debit_account = "34111"
+                            credit_account = self.default_bank_account
                     else:
                         description = transaction.description
                 else:
@@ -3445,6 +3531,11 @@ class IntegratedBankProcessor:
                 # Determine bank code for this file
                 bank_code = self.current_bank_name or "NH"
                 description = f"Nộp tiền vào TK NH {bank_code}"
+                # Set account to 1111
+                if rule.document_type == "BC":  # Receipt
+                    credit_account = "1111"
+                else:  # Payment
+                    debit_account = "1111"
                 self.logger.info(
                     f"Applied NT bank deposit formatting: {description}"
                 )
@@ -3453,8 +3544,12 @@ class IntegratedBankProcessor:
             elif "THU PHI TT SO" in transaction.description.upper():
                 description = "Phí TTQT"
                 # Set account to 6427
-                debit_account = "6427"
-                credit_account = self.default_bank_account
+                if rule.document_type == "BC":  # Receipt
+                    debit_account = self.default_bank_account
+                    credit_account = "6427"
+                else:  # Payment
+                    debit_account = "6427"
+                    credit_account = self.default_bank_account
                 self.logger.info(
                     f"Applied THU PHI TT formatting: {description}"
                 )
@@ -3465,6 +3560,13 @@ class IntegratedBankProcessor:
                 or "GHTK" in transaction.description.upper()
             ):
                 description = "GHTK thanh toán tiền thu hộ theo bảng kê"
+                # Set account to 1311
+                if rule.document_type == "BC":  # Receipt
+                    debit_account = self.default_bank_account
+                    credit_account = "1311"
+                else:  # Payment
+                    debit_account = "1311"
+                    credit_account = self.default_bank_account
                 self.logger.info(f"Applied GHTK formatting: {description}")
 
             # RULE 5: LAI NHAP VON pattern
@@ -3474,6 +3576,13 @@ class IntegratedBankProcessor:
                     self.current_bank_name or "ACB"
                 )  # Default to ACB if not available
                 description = f"Lãi nhập vốn NH {bank_code}"
+                # Set account to 811
+                if rule.document_type == "BC":  # Receipt
+                    debit_account = self.default_bank_account
+                    credit_account = "811"
+                else:  # Payment
+                    debit_account = "811"
+                    credit_account = self.default_bank_account
                 self.logger.info(
                     f"Applied LAI NHAP VON formatting: {description}"
                 )
@@ -3488,8 +3597,12 @@ class IntegratedBankProcessor:
                     account_number = account_match.group(1)
                     description = f"Trả lãi vay KU {account_number}"
                     # Set account to 6354
-                    debit_account = "6354"
-                    credit_account = self.default_bank_account
+                    if rule.document_type == "BC":  # Receipt
+                        debit_account = self.default_bank_account
+                        credit_account = "6354"
+                    else:  # Payment
+                        debit_account = "6354"
+                        credit_account = self.default_bank_account
                     self.logger.info(
                         f"Applied TRICH THU TIEN VAY formatting: {description}"
                     )

@@ -962,7 +962,7 @@ async def process_bank_statement(file: UploadFile):
                     processor.current_bank_info = {
                         "code": "VCB",
                         "name": "NGÂN HÀNG TMCP NGOẠI THƯƠNG VIỆT NAM",
-                        "short_name": "VCB",
+                        "short_name": "VIETCOMBANK",
                         "address": "198 Trần Quang Khải, Hoàn Kiếm, Hà Nội",
                     }
 

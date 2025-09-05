@@ -72,6 +72,10 @@ class CounterpartyExtractor:
             "PSHV2F18": "PSHV",
             "08NTRAI": "LUG08NTRAI",
             "LDH": "LUGLDH",
+            "TIMESCT": "TIMESCT_EV",
+            "GO HLONG": "GOHALONG",
+            "LUGTIMESCITY": "TIMESCT_EV",
+            "HOLDALLVC3/2": "HOLDALLVC32",
             # Add more mappings here in the future as needed
             # "SHORT": "FULL_NAME",
         }
@@ -123,6 +127,29 @@ class CounterpartyExtractor:
                 r"F/O\s+(?:\d+\s+)?([A-Z][A-Z\s]+(?:TNHH|CO PHAN|CP|JSC)[A-Z\s]+)",
                 "beneficiary",
             ),
+            # Enhanced patterns for company names after "CHO CTY" or "CHO CONG TY"
+            (
+                r"CHO\s+(?:CTY|CONG TY)\s+(?:TNHH|CO PHAN|CP|JSC)?\s*([A-Z][A-Z\s]+?)(?=\s+(?:HD|THANH TOAN|CHUYEN KHOAN|CK|CHI|F/O|B/O|\d{6}|T\d{1,2}|THANG))",
+                "beneficiary",
+            ),
+            (
+                r"CHO\s+(?:CTY|CONG TY)\s+(?:TNHH|CO PHAN|CP|JSC)?\s*([A-Z][A-Z\s]+)",
+                "beneficiary",
+            ),
+            # Enhanced patterns for hyphenated company names
+            (
+                r"([A-Z][A-Z\s]+(?:TNHH|CO PHAN|CP|JSC)[A-Z\s]+)-\1",
+                "hyphenated_duplicate",
+            ),  # Handles RIVERSIDE TOWER-RIVERSIDE TOWER
+            (
+                r"([A-Z][A-Z\s]+(?:TNHH|CO PHAN|CP|JSC)?[A-Z\s]*)-[A-Z0-9]+",
+                "hyphenated_prefix",
+            ),  # Handles VINHOMES1-GD...
+            # Specific pattern for VINHOMES
+            (
+                r"([A-Z]+)[0-9]*-",
+                "brand_prefix",
+            ),  # Handles VINHOMES1-
             # CTY patterns with corporate type suffix (TNHH, CP, etc.)
             (
                 r"CTY\s+(?:TNHH|CO PHAN|CP)[\s\w]+?(?=\s+(?:TT|THANH TOAN|CHUYEN KHOAN|CK|CHI|F/O|B/O|\d{6}))",
@@ -142,6 +169,20 @@ class CounterpartyExtractor:
                 "company",
             ),
             (r"CONG TY\s+(?:TNHH|CO PHAN|CP)[\s\w]+", "company"),
+            # Enhanced patterns for international company names
+            (
+                r"([A-Z]+)\s+VIETNAM\s+(?:CO\s+LTD|COMPANY|CORP)",
+                "international_vietnam",
+            ),
+            (
+                r"([A-Z]+)\s+(?:CO\s+LTD|COMPANY|CORP|JSC)",
+                "international",
+            ),
+            # Enhanced patterns for abbreviated company names from concatenated strings
+            (
+                r"([A-Z]{3,6})[A-Z]+(?:JSC)?-",
+                "abbreviation_prefix",
+            ),  # Handles GHTKJSC-, AEON VIETNAM CO LTD-
             # Company name after numbers - common pattern in transfers
             (
                 r"\d{5,}(?:\s+|-)([A-Z][A-Z\s]+(?:TNHH|CO PHAN|CP|JSC)[A-Z\s]+)(?=\s+(?:TT|THANH TOAN|CK|CHI))",
@@ -276,6 +317,7 @@ class CounterpartyExtractor:
         - Business entity indicators (CTY, TNHH, CO PHAN, etc.)
         - Extra whitespace and formatting
         - Common transaction-related words
+        - Special handling for duplicate company names in hyphenated formats
 
         Args:
             name: Raw counterparty name
@@ -291,6 +333,77 @@ class CounterpartyExtractor:
 
         # Log the original name for debugging
         self.logger.debug(f"Cleaning counterparty name: '{name}'")
+
+        # Special handling for hyphenated duplicate company names (e.g., "RIVERSIDE TOWER-RIVERSIDE TOWER")
+        hyphenated_duplicate_pattern = (
+            r"([A-Z][A-Z\s]+(?:TNHH|CO PHAN|CP|JSC)?[A-Z\s]*)-\1"
+        )
+        hyphenated_match = re.search(hyphenated_duplicate_pattern, cleaned)
+        if hyphenated_match:
+            # Extract the first part as the company name
+            cleaned = hyphenated_match.group(1)
+            self.logger.debug(
+                f"Extracted company name from hyphenated duplicate: '{cleaned}'"
+            )
+
+        # Special handling for hyphenated prefix patterns (e.g., "VINHOMES1-GD...")
+        hyphenated_prefix_pattern = (
+            r"([A-Z][A-Z\s]+(?:TNHH|CO PHAN|CP|JSC)?[A-Z\s]*)-[A-Z0-9]+"
+        )
+        hyphenated_prefix_match = re.search(hyphenated_prefix_pattern, cleaned)
+        if hyphenated_prefix_match and not hyphenated_match:
+            # Extract the first part as the company name
+            cleaned = hyphenated_prefix_match.group(1)
+            self.logger.debug(
+                f"Extracted company name from hyphenated prefix: '{cleaned}'"
+            )
+
+        # Special handling for brand prefix patterns (e.g., "VINHOMES1-")
+        brand_prefix_pattern = r"([A-Z]+)[0-9]*-"
+        brand_prefix_match = re.search(brand_prefix_pattern, cleaned)
+        if (
+            brand_prefix_match
+            and not hyphenated_match
+            and not hyphenated_prefix_match
+        ):
+            # Extract the brand name as the company name
+            cleaned = brand_prefix_match.group(1)
+            self.logger.debug(f"Extracted brand name from prefix: '{cleaned}'")
+
+        # Special handling for abbreviation prefix patterns (e.g., "GHTKJSC-", "AEON VIETNAM CO LTD-")
+        abbreviation_pattern = r"([A-Z]{3,6})[A-Z\s]+(?:JSC)?-"
+        abbreviation_match = re.search(abbreviation_pattern, cleaned)
+        if abbreviation_match:
+            # Extract the abbreviation as the company name and keep original case
+            abbreviation = abbreviation_match.group(1)
+            # For abbreviations, we want to preserve the original capitalization
+            # but we'll title case it for consistency
+            cleaned = abbreviation
+            self.logger.debug(f"Extracted company abbreviation: '{cleaned}'")
+
+        # Special handling for international company names with "VIETNAM"
+        international_vietnam_pattern = (
+            r"([A-Z]+)\s+VIETNAM\s+(?:CO\s+LTD|COMPANY|CORP)"
+        )
+        international_vietnam_match = re.search(
+            international_vietnam_pattern, cleaned
+        )
+        if international_vietnam_match:
+            # Extract the first part as the company name
+            cleaned = international_vietnam_match.group(1)
+            self.logger.debug(
+                f"Extracted international company name: '{cleaned}'"
+            )
+
+        # Special handling for other international company names
+        international_pattern = r"([A-Z]+)\s+(?:CO\s+LTD|COMPANY|CORP|JSC)"
+        international_match = re.search(international_pattern, cleaned)
+        if international_match and not international_vietnam_match:
+            # Extract the first part as the company name
+            cleaned = international_match.group(1)
+            self.logger.debug(
+                f"Extracted other international company name: '{cleaned}'"
+            )
 
         # Remove business entity indicators from the beginning and end
         for indicator in sorted(
