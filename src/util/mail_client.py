@@ -124,6 +124,22 @@ class EmailClient:
             logger.error(f"Lỗi khi đính kèm file {file_path}: {str(e)}")
             raise
 
+    def attach_files(self, msg, file_paths):
+        """
+        Đính kèm nhiều file vào email
+
+        Args:
+            msg (MIMEMultipart): Đối tượng email
+            file_paths (list): Danh sách đường dẫn đến các file cần đính kèm
+
+        Returns:
+            MIMEMultipart: Email với các file đã đính kèm
+        """
+        for file_path in file_paths:
+            if file_path and os.path.exists(file_path):
+                msg = self.attach_file(msg, file_path)
+        return msg
+
     def send(self, msg, to=None, cc=None, bcc=None):
         """
         Gửi email

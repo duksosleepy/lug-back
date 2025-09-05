@@ -22,7 +22,7 @@ def load_config():
 
 
 def send_notification_email(
-    to, subject, body, attachment_path=None, html=False
+    to, subject, body, attachment_path=None, attachment_paths=None, html=False
 ):
     """
     Gửi email thông báo
@@ -31,7 +31,8 @@ def send_notification_email(
         to (str or list): Người nhận
         subject (str): Tiêu đề
         body (str): Nội dung
-        attachment_path (str, optional): Đường dẫn đến file đính kèm
+        attachment_path (str, optional): Đường dẫn đến file đính kèm (cho backward compatibility)
+        attachment_paths (list, optional): Danh sách đường dẫn đến các file đính kèm
         html (bool, optional): Nếu True, body sẽ được hiểu là HTML
 
     Returns:
@@ -46,7 +47,9 @@ def send_notification_email(
             msg = client.create_message(to, subject, body, html=html)
 
             # Đính kèm file nếu có
-            if attachment_path and os.path.exists(attachment_path):
+            if attachment_paths:
+                msg = client.attach_files(msg, attachment_paths)
+            elif attachment_path and os.path.exists(attachment_path):
                 msg = client.attach_file(msg, attachment_path)
 
             # Gửi email

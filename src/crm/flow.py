@@ -2,11 +2,14 @@ import json
 import re
 from datetime import datetime, timedelta
 from typing import Dict, List
+from tempfile import NamedTemporaryFile
+import pandas as pd
 
 import httpx
 
 from src.settings import app_settings
 from util.logging import get_logger
+from util.send_email import send_notification_email
 
 logger = get_logger(__name__)
 # API endpoints and credentials - Using environment variables
@@ -375,39 +378,202 @@ def process_data():
         logger.info("Fetching offline data...")
         offline_data = fetch_data(token, is_online=False)
 
-        # Step 3: Apply filters to both datasets
+        # Combine all data before filtering negative records
+        all_data = online_data + offline_data
+        
+        # Step 3: Filter negative records (Doanh_Thu or So_Luong < 0)
+        logger.info("Filtering negative records...")
+        negative_records = filter_negative_records(all_data)
+        logger.info(f"Found {len(negative_records)} negative records")
+
+        # Step 4: Apply filters to both datasets
         logger.info("Applying filters to online data...")
         filtered_online_data = apply_filters(online_data, is_online=True)
 
         logger.info("Applying filters to offline data...")
         filtered_offline_data = apply_filters(offline_data, is_online=False)
 
-        # Step 4: Combine filtered data
+        # Step 5: Combine filtered data
         all_filtered_data = filtered_online_data + filtered_offline_data
         logger.info(
             f"Total filtered records: {len(all_filtered_data)} (Online: {len(filtered_online_data)}, Offline: {len(filtered_offline_data)})"
         )
 
-        # Step 5: Transform data
+        # Step 6: Transform data
         logger.info("Transforming data...")
         batch_data = transform_data(all_filtered_data)
         logger.info(f"Transformed data into {len(batch_data)} batch requests")
 
-        # Step 6: Submit batch
+        # Step 7: Submit batch
         if batch_data:
             logger.info("Submitting batch...")
             result = submit_batch(batch_data)
             logger.info(f"Batch submission result: {result}")
+            
+            # Step 8: Send completion email with Excel attachments
+            logger.info("Sending completion email...")
+            send_completion_email(all_filtered_data, negative_records)
+            
             return result
         else:
             logger.warning(
                 "No data to submit after filtering and transformation"
             )
+            # Send email even if no data to submit
+            send_completion_email([], negative_records)
             return {"status": "no_data", "message": "No data to submit"}
 
     except Exception as e:
         logger.error(f"An error occurred in the data pipeline: {e}")
         raise
+
+
+def create_excel_file(data: List[Dict], filename: str) -> str:
+    """Create an Excel file with the specified headers from the data.
+    
+    Args:
+        data: List of dictionaries containing the data
+        filename: Name for the temporary file
+        
+    Returns:
+        Path to the created Excel file
+    """
+    # Define the required headers
+    headers = [
+        "Ngày Ct", "Mã Ct", "Số Ct", "Mã bộ phận", "Mã đơn hàng", 
+        "Tên khách hàng", "Số điện thoại", "Tỉnh thành", "Quận huyện", 
+        "Phường xã", "Địa chỉ", "Mã hàng", "Tên hàng", "Imei", 
+        "Số lượng", "Doanh thu", "Ghi chú"
+    ]
+    
+    # Create a DataFrame with the specified columns
+    # For each row, map the data to the required headers
+    rows = []
+    for item in data:
+        row = {}
+        for header in headers:
+            # Map the header to the corresponding field in the data
+            field_mapping = {
+                "Ngày Ct": "Ngay_Ct",
+                "Mã Ct": "Ma_Ct",
+                "Số Ct": "So_Ct",
+                "Mã bộ phận": "Ma_BP",
+                "Mã đơn hàng": "Ma_Don_Hang",
+                "Tên khách hàng": "Ten_Khach_Hang",
+                "Số điện thoại": "So_Dien_Thoai",
+                "Tỉnh thành": "Tinh_Thanh",
+                "Quận huyện": "Quan_Huyen",
+                "Phường xã": "Phuong_Xa",
+                "Địa chỉ": "Dia_Chi",
+                "Mã hàng": "Ma_Hang",
+                "Tên hàng": "Ten_Hang",
+                "Imei": "Imei",
+                "Số lượng": "So_Luong",
+                "Doanh thu": "Doanh_Thu",
+                "Ghi chú": "Ghi_Chu"
+            }
+            
+            # Get the corresponding field name or use None if not found
+            field_name = field_mapping.get(header)
+            if field_name and field_name in item:
+                row[header] = item[field_name]
+            else:
+                row[header] = None  # Fill with null if field doesn't exist
+                
+        rows.append(row)
+    
+    # Create DataFrame and save to Excel
+    df = pd.DataFrame(rows, columns=headers)
+    
+    # Create a temporary file
+    with NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
+        temp_file_path = tmp.name
+        
+    # Save DataFrame to Excel
+    df.to_excel(temp_file_path, index=False, sheet_name='Data')
+    
+    return temp_file_path
+
+
+def filter_negative_records(data: List[Dict]) -> List[Dict]:
+    """Filter records with negative Doanh_Thu or So_Luong values.
+    
+    Args:
+        data: List of dictionaries containing the data
+        
+    Returns:
+        List of dictionaries with negative values
+    """
+    negative_records = []
+    
+    for item in data:
+        # Check if Doanh_Thu or So_Luong is negative
+        doanh_thu = item.get("Doanh_Thu", 0)
+        so_luong = item.get("So_Luong", 0)
+        
+        # Convert to float for comparison if possible
+        try:
+            doanh_thu = float(doanh_thu) if doanh_thu is not None else 0
+            so_luong = float(so_luong) if so_luong is not None else 0
+        except (ValueError, TypeError):
+            # If conversion fails, assume non-negative
+            doanh_thu = 0
+            so_luong = 0
+            
+        if doanh_thu < 0 or so_luong < 0:
+            negative_records.append(item)
+            
+    return negative_records
+
+
+def send_completion_email(transformed_data: List[Dict], negative_records: List[Dict]):
+    """Send completion email with Excel attachments.
+    
+    Args:
+        transformed_data: Final processed data
+        negative_records: Records with negative values
+    """
+    try:
+        # Create Excel files
+        final_data_file = create_excel_file(transformed_data, "final_data.xlsx")
+        negative_records_file = create_excel_file(negative_records, "negative_records.xlsx")
+        
+        # Send email with both attachments
+        subject = "CRM Data Processing Completed"
+        body = f"""
+        CRM data processing has been completed successfully.
+        
+        Summary:
+        - Final processed data: {len(transformed_data)} records
+        - Negative records (Doanh thu or So luong < 0): {len(negative_records)} records
+        
+        Please find the attached Excel files for your reference.
+        
+        This is an automated email.
+        """
+        
+        result = send_notification_email(
+            to="songkhoi123@gmail.com",
+            subject=subject,
+            body=body,
+            attachment_paths=[final_data_file, negative_records_file]
+        )
+        
+        if result:
+            logger.info("Completion email sent successfully")
+        else:
+            logger.warning("Failed to send completion email")
+            
+        # Clean up temporary files
+        import os
+        try:
+            os.unlink(final_data_file)
+            os.unlink(negative_records_file)
+        except Exception as e:
+            logger.warning(f"Failed to clean up temporary files: {e}")
+            
+    except Exception as e:
+        logger.error(f"Failed to send completion email: {e}")
 
 
 # Kept for backward compatibility
