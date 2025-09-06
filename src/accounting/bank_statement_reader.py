@@ -351,7 +351,7 @@ class BankStatementReader:
                             if isinstance(cell_value, str) and (
                                 "/" in cell_value or "-" in cell_value
                             ):
-                                pd.to_datetime(cell_value, errors="raise")
+                                pd.to_datetime(cell_value, errors="raise", dayfirst=True)
                                 has_date = True
                                 break
                         except:
@@ -528,7 +528,7 @@ class BankStatementReader:
 
             # Parse dates if date column exists
             if "date" in df.columns:
-                df["date"] = pd.to_datetime(df["date"], errors="coerce")
+                df["date"] = pd.to_datetime(df["date"], errors="coerce", dayfirst=True)
                 # Remove rows with invalid dates
                 df = df.dropna(subset=["date"])
 

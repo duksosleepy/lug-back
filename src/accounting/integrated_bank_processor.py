@@ -1165,9 +1165,43 @@ class IntegratedBankProcessor:
         - Output: "GO BRVT" (removes trailing digits)
 
         This is different from clean_department_code which is used for counterparty search.
+
+        For the new requirement:
+        - Input: "KL-BARIA1" (from Ma_Dt field)
+        - Output: "BARIA1" (split by "-" and get last element)
         """
         if not department_code or not isinstance(department_code, str):
             return ""
+
+        # Strip whitespace
+        original_code = department_code.strip()
+
+        # For the new requirement: split by "-" and get the last element
+        # Example: "KL-BARIA1" -> "BARIA1"
+        if "-" in original_code:
+            parts = original_code.split("-")
+            if parts:
+                last_element = parts[-1]  # Get the last element
+
+                # Remove trailing digits for cleaner format
+                # Example: "BARIA1" -> "BARIA"
+                cleaned_code = re.sub(r"\d+$", "", last_element).strip()
+                return cleaned_code
+
+        # Fallback to existing logic for other formats
+        # Split by "_" if present
+        if "_" in original_code:
+            parts = original_code.split("_")
+            if parts:
+                last_element = parts[-1].strip()
+                # Remove trailing digits
+                cleaned_code = re.sub(r"\d+$", "", last_element).strip()
+                return cleaned_code
+
+        # If no separators, try to clean the original code
+        # Remove trailing digits
+        cleaned_code = re.sub(r"\d+$", "", original_code).strip()
+        return cleaned_code
 
     def _detect_vietnamese_person_name_in_description(
         self, description: str
@@ -1437,7 +1471,7 @@ class IntegratedBankProcessor:
             po_numbers_text = match.group(1).strip()
             # Split by whitespace and filter for valid PO number patterns
             po_numbers = po_numbers_text.split()
-            
+
             # Filter to only include valid PO numbers (not text words like "Ma", "g", "iao", "dich")
             # A valid PO number should be:
             # 1. Contain at least one digit
@@ -1445,14 +1479,16 @@ class IntegratedBankProcessor:
             # 3. Not be common words
             valid_po_numbers = []
             common_words = {"ma", "g", "iao", "dich", "trace", "acsp"}
-            
+
             for po_num in po_numbers:
                 # Check if it's a valid PO number
                 lower_po_num = po_num.lower()
-                if (re.match(r"^[A-Z0-9]+$", po_num) and 
-                    any(c.isdigit() for c in po_num) and 
-                    len(po_num) >= 4 and
-                    lower_po_num not in common_words):
+                if (
+                    re.match(r"^[A-Z0-9]+$", po_num)
+                    and any(c.isdigit() for c in po_num)
+                    and len(po_num) >= 4
+                    and lower_po_num not in common_words
+                ):
                     valid_po_numbers.append(po_num)
 
             if valid_po_numbers:
@@ -1463,8 +1499,10 @@ class IntegratedBankProcessor:
         # If we can't extract PO numbers properly, try to extract trace/ACSP numbers
         trace_or_acsp_number = self._extract_trace_or_acsp_number(description)
         if trace_or_acsp_number:
-            return f"Thu tiền KH online thanh toán cho PO: {trace_or_acsp_number}"
-            
+            return (
+                f"Thu tiền KH online thanh toán cho PO: {trace_or_acsp_number}"
+            )
+
         return None
 
     def _detect_phone_number_in_description(self, description: str) -> bool:
@@ -1678,12 +1716,16 @@ class IntegratedBankProcessor:
 
         # Handle ACSP with variable spacing between letters
         # This pattern matches 'ACSP', 'A CSP', 'A  CSP', etc. followed by numbers
-        acsp_matches = re.findall(r"[Aa]\s*[Cc]\s*[Ss]?\s*[Pp]\s*(\d+)", description)
+        acsp_matches = re.findall(
+            r"[Aa]\s*[Cc]\s*[Ss]?\s*[Pp]\s*(\d+)", description
+        )
         if acsp_matches:
             return acsp_matches[0]
 
         # Fallback pattern for very loose ACSP matching
-        acsp_fallback_matches = re.findall(r"[Aa]\s*[Cc]\s*[Pp]\s*(\d+)", description)
+        acsp_fallback_matches = re.findall(
+            r"[Aa]\s*[Cc]\s*[Pp]\s*(\d+)", description
+        )
         if acsp_fallback_matches:
             return acsp_fallback_matches[0]
 
@@ -2741,7 +2783,7 @@ class IntegratedBankProcessor:
                     )
 
             # **PRIORITY 0 (HIGHEST): MBB Special Case Handling**
-            
+
             # NEW BUSINESS LOGIC: Special handling for MBB transfer statements with 'Sang Tam' in description
             # Even though have Trace in description, but the code, name and address must be: 31754,CÔNG TY TNHH SÁNG TÂM, ...
             mbb_sang_tam_detected = (
@@ -2753,42 +2795,45 @@ class IntegratedBankProcessor:
                     for keyword in ["chuyen tien", "chuyen khoan", "transfer"]
                 )
             )
-            
+
             # NEW BUSINESS LOGIC: Special handling for MBB 'BP DUY TRI SMS BANKING NGOAI VT DN' statements
             mbb_sms_fee_detected = (
                 self.current_bank_name
                 and self.current_bank_name.upper() == "MBB"
-                and "bp duy tri sms banking ngoai vt dn" in transaction.description.lower()
+                and "bp duy tri sms banking ngoai vt dn"
+                in transaction.description.lower()
             )
-            
+
             # NEW BUSINESS LOGIC: Special handling for MBB 'Tra lai tien gui' statements
             mbb_interest_payment_detected = (
                 self.current_bank_name
                 and self.current_bank_name.upper() == "MBB"
                 and "tra lai tien gui" in transaction.description.lower()
             )
-            
+
             # MBB phone number detection - for statements with phone numbers
             mbb_phone_number_detected = (
                 self.current_bank_name
                 and self.current_bank_name.upper() == "MBB"
-                and self._detect_phone_number_in_description(transaction.description)
+                and self._detect_phone_number_in_description(
+                    transaction.description
+                )
             )
-            
+
             # MBB trace/ACSP detection - but exclude special cases
             mbb_trace_acsp_detected = (
                 self.current_bank_name
                 and self.current_bank_name.upper() == "MBB"
                 and self._detect_trace_or_acsp_keywords(transaction.description)
                 and not mbb_sang_tam_detected  # Exclude Sang Tam transfers
-                and not mbb_sms_fee_detected   # Exclude SMS fee statements
+                and not mbb_sms_fee_detected  # Exclude SMS fee statements
                 and not mbb_interest_payment_detected  # Exclude interest payment statements
             )
-            
+
             # NOTE: Phone numbers and person names alone NO LONGER trigger KLONLINE for MBB
             # Only trace/ACSP keywords trigger the KLONLINE rule (and not for special cases above)
             # EXCEPT for phone numbers which should still trigger KLONLINE processing with proper formatting
-            
+
             # Process special cases first, then phone numbers, then trace/ACSP cases
             if mbb_sang_tam_detected:
                 # Special handling for MBB Sang Tam transfer statements
@@ -2796,13 +2841,19 @@ class IntegratedBankProcessor:
                 self.logger.info(
                     f"MBB Sang Tam Transfer Detected: Description={transaction.description}"
                 )
-                
+
                 # Format the transfer description
-                formatted_transfer_desc = self.format_sang_tam_transfer_description(
-                    transaction.description
+                formatted_transfer_desc = (
+                    self.format_sang_tam_transfer_description(
+                        transaction.description
+                    )
                 )
-                description = formatted_transfer_desc if formatted_transfer_desc else transaction.description
-                
+                description = (
+                    formatted_transfer_desc
+                    if formatted_transfer_desc
+                    else transaction.description
+                )
+
                 # Set counterparty to Sáng Tâm company info
                 counterparty_info = {
                     "code": "31754",
@@ -2813,7 +2864,7 @@ class IntegratedBankProcessor:
                     "phone": "",
                     "tax_id": "",
                 }
-                
+
                 self.logger.info(
                     f"Applied MBB Sang Tam transfer logic: Code={counterparty_info['code']}, "
                     f"Name={counterparty_info['name']}"
@@ -2823,10 +2874,10 @@ class IntegratedBankProcessor:
                 self.logger.info(
                     f"MBB SMS Banking Fee Detected: Description={transaction.description}"
                 )
-                
+
                 # Set description to "Phí Duy trì BSMS"
                 description = "Phí Duy trì BSMS"
-                
+
                 # Set counterparty to MB Bank information
                 counterparty_info = {
                     "code": "83873",
@@ -2837,7 +2888,7 @@ class IntegratedBankProcessor:
                     "phone": "",
                     "tax_id": "",
                 }
-                
+
                 self.logger.info(
                     f"Applied MBB SMS banking fee logic: Code={counterparty_info['code']}, "
                     f"Name={counterparty_info['name']}"
@@ -2847,14 +2898,16 @@ class IntegratedBankProcessor:
                 self.logger.info(
                     f"MBB Interest Payment Detected: Description={transaction.description}"
                 )
-                
+
                 # Set description to "Lãi tiền gửi ngân hàng"
                 description = "Lãi tiền gửi ngân hàng"
-                
+
                 # Extract account number from description if available
-                account_match = re.search(r"so tk:\s*([0-9\-]+)", transaction.description.lower())
+                account_match = re.search(
+                    r"so tk:\s*([0-9\-]+)", transaction.description.lower()
+                )
                 account_number = account_match.group(1) if account_match else ""
-                
+
                 # Set counterparty to MB Bank information
                 counterparty_info = {
                     "code": "83873",
@@ -2865,7 +2918,7 @@ class IntegratedBankProcessor:
                     "phone": "",
                     "tax_id": "",
                 }
-                
+
                 self.logger.info(
                     f"Applied MBB interest payment logic: Code={counterparty_info['code']}, "
                     f"Name={counterparty_info['name']}, Account={account_number}"
@@ -2877,14 +2930,16 @@ class IntegratedBankProcessor:
                 )
 
                 # Extract person name for logging (if present)
-                person_name = self._extract_vietnamese_person_name_from_description(
-                    transaction.description
+                person_name = (
+                    self._extract_vietnamese_person_name_from_description(
+                        transaction.description
+                    )
                 )
 
-                detection_reason = (
-                    "trace_acsp"  # Updated reason for clarity
+                detection_reason = "trace_acsp"  # Updated reason for clarity
+                detected_value = (
+                    "trace/acsp keyword"  # Updated value for clarity
                 )
-                detected_value = "trace/acsp keyword"  # Updated value for clarity
 
                 self.logger.info(
                     f"MBB Online Transaction Detected: Bank={self.current_bank_name}, "
@@ -2918,16 +2973,27 @@ class IntegratedBankProcessor:
                         r"\b84[35789]\d{8}\b",  # International format without +
                     ]
                     for pattern in phone_patterns:
-                        cleaned_description = re.sub(pattern, "", cleaned_description)
-                
+                        cleaned_description = re.sub(
+                            pattern, "", cleaned_description
+                        )
+
                 if person_name:
                     # Remove person name from description
-                    cleaned_description = re.sub(re.escape(person_name), "", cleaned_description, flags=re.IGNORECASE)
-                
+                    cleaned_description = re.sub(
+                        re.escape(person_name),
+                        "",
+                        cleaned_description,
+                        flags=re.IGNORECASE,
+                    )
+
                 # Clean up extra spaces and punctuation
-                cleaned_description = re.sub(r"[\s\-,;:.]+", " ", cleaned_description).strip()
+                cleaned_description = re.sub(
+                    r"[\s\-,;:.]+", " ", cleaned_description
+                ).strip()
                 # Remove extra spaces around common separators
-                cleaned_description = re.sub(r"\s*[-,;:.]\s*", " ", cleaned_description).strip()
+                cleaned_description = re.sub(
+                    r"\s*[-,;:.]\s*", " ", cleaned_description
+                ).strip()
 
                 # Modify description for MBB online transactions (trace/ACSP detected)
                 # Extract PO number if available - first check for trace/ACSP number, then PO number
@@ -2968,13 +3034,13 @@ class IntegratedBankProcessor:
                 )
 
                 # Extract person name for logging (if present)
-                person_name = self._extract_vietnamese_person_name_from_description(
-                    transaction.description
+                person_name = (
+                    self._extract_vietnamese_person_name_from_description(
+                        transaction.description
+                    )
                 )
 
-                detection_reason = (
-                    "phone_number"  # Updated reason for clarity
-                )
+                detection_reason = "phone_number"  # Updated reason for clarity
                 detected_value = "phone number"  # Updated value for clarity
 
                 self.logger.info(
@@ -3009,16 +3075,27 @@ class IntegratedBankProcessor:
                         r"\b84[35789]\d{8}\b",  # International format without +
                     ]
                     for pattern in phone_patterns:
-                        cleaned_description = re.sub(pattern, "", cleaned_description)
-                
+                        cleaned_description = re.sub(
+                            pattern, "", cleaned_description
+                        )
+
                 if person_name:
                     # Remove person name from description
-                    cleaned_description = re.sub(re.escape(person_name), "", cleaned_description, flags=re.IGNORECASE)
-                
+                    cleaned_description = re.sub(
+                        re.escape(person_name),
+                        "",
+                        cleaned_description,
+                        flags=re.IGNORECASE,
+                    )
+
                 # Clean up extra spaces and punctuation
-                cleaned_description = re.sub(r"[\s\-,;:.]+", " ", cleaned_description).strip()
+                cleaned_description = re.sub(
+                    r"[\s\-,;:.]+", " ", cleaned_description
+                ).strip()
                 # Remove extra spaces around common separators
-                cleaned_description = re.sub(r"\s*[-,;:.]\s*", " ", cleaned_description).strip()
+                cleaned_description = re.sub(
+                    r"\s*[-,;:.]\s*", " ", cleaned_description
+                ).strip()
 
                 # Modify description for MBB phone transactions
                 # Extract PO number if available
@@ -3280,9 +3357,11 @@ class IntegratedBankProcessor:
                     self.logger.info(
                         f"Applied Sang Tam transfer formatting: {description}"
                     )
-                    
+
                     # For Sang Tam transfers, determine the proper accounts
-                    transfer_info = self.extract_transfer_info(transaction.description)
+                    transfer_info = self.extract_transfer_info(
+                        transaction.description
+                    )
                     if transfer_info.from_account and transfer_info.to_account:
                         # For transfer transactions, we need to determine the proper accounting treatment
                         # Based on the document type and business rules:
@@ -3294,9 +3373,11 @@ class IntegratedBankProcessor:
                         else:  # BN - Payment
                             # For payments: money goes out from the source account
                             # For transfer payments, the debit should be accounts payable (3311) or expense
-                            debit_account = "3311"  # Other expenses for transfer payments
+                            debit_account = (
+                                "3311"  # Other expenses for transfer payments
+                            )
                             credit_account = transfer_info.from_account
-                        
+
                         self.logger.info(
                             f"Set Sang Tam transfer accounts: Dr={debit_account}, Cr={credit_account}"
                         )
@@ -3347,16 +3428,23 @@ class IntegratedBankProcessor:
                     # Extract the account number from the description
                     # Updated pattern to handle "TK VAY" at the end of the description
                     account_match = re.search(
-                        r"(?:TK VAY|THANH LY TK VAY|TK VAY THU NO TRUOC HAN) (\d+)", transaction.description.upper()
+                        r"(?:TK VAY|THANH LY TK VAY|TK VAY THU NO TRUOC HAN) (\d+)",
+                        transaction.description.upper(),
                     )
                     # Fallback pattern to extract the last number if the above doesn't match
                     if not account_match:
                         # Extract all numbers and take the last one for TRICH TAI KHOAN patterns
-                        numbers = re.findall(r"\b(\d{6,})\b", transaction.description)
+                        numbers = re.findall(
+                            r"\b(\d{6,})\b", transaction.description
+                        )
                         if numbers:
                             account_number = numbers[-1]
-                            account_match = type('MockMatch', (), {'group': lambda x, num=account_number: num})()
-                    
+                            account_match = type(
+                                "MockMatch",
+                                (),
+                                {"group": lambda x, num=account_number: num},
+                            )()
+
                     if account_match:
                         account_number = account_match.group(1)
 
@@ -3407,11 +3495,17 @@ class IntegratedBankProcessor:
                     # Fallback to extract last number if specific pattern doesn't match
                     if not account_match:
                         # Extract all numbers and take the last one for GNOL patterns
-                        numbers = re.findall(r"\b(\d{9,})\b", transaction.description)
+                        numbers = re.findall(
+                            r"\b(\d{9,})\b", transaction.description
+                        )
                         if numbers:
                             account_number = numbers[-1]
-                            account_match = type('MockMatch', (), {'group': lambda x, num=account_number: num})()
-                    
+                            account_match = type(
+                                "MockMatch",
+                                (),
+                                {"group": lambda x, num=account_number: num},
+                            )()
+
                     if account_match:
                         account_number = account_match.group(1)
                         description = f"Nhận giải ngân HĐGN {account_number}"
@@ -3472,14 +3566,16 @@ class IntegratedBankProcessor:
                     base_description = "Thu tiền bán hàng khách lẻ"
 
                 # Build the complete description in new format
+                # Convert pos_code to integer string to remove decimal if present
+                clean_pos_code = str(int(float(pos_code))) if pos_code else pos_code
                 if description_dept_code:
-                    description = f"{base_description} (POS {pos_code} - {description_dept_code})"
+                    description = f"{base_description} (POS {clean_pos_code} - {description_dept_code})"
                 else:
-                    description = f"{base_description} (POS {pos_code})"
+                    description = f"{base_description} (POS {clean_pos_code})"
 
-                # Add 4-digit code if found
-                if four_digit_code:
-                    description += f"_{four_digit_code}"
+                # Remove the 4-digit code suffix - not needed for new format
+                # if four_digit_code:
+                #     description += f"_{four_digit_code}"
 
                 self.logger.info(
                     f"Applied NEW POS machine logic: {description}"
@@ -3636,9 +3732,15 @@ class IntegratedBankProcessor:
             else:
                 # For all other cases, use the raw/original description
                 # But don't override if we've already formatted it (e.g., MBB online transactions)
-                if not ('description' in locals() and description and "Thu tiền KH online thanh toán" in description):
+                if not (
+                    "description" in locals()
+                    and description
+                    and "Thu tiền KH online thanh toán" in description
+                ):
                     description = transaction.description
-                    self.logger.info(f"Using original description: {description}")
+                    self.logger.info(
+                        f"Using original description: {description}"
+                    )
 
             # Reset the current_transaction_is_interest_payment flag after description formatting
             # Make sure this happens only if we haven't already reset it in a special case handler
@@ -3767,7 +3869,7 @@ class IntegratedBankProcessor:
                         reference=str(row.get("reference", "")),
                         datetime=row["date"]
                         if isinstance(row["date"], datetime)
-                        else pd.to_datetime(row["date"]),
+                        else pd.to_datetime(row["date"], dayfirst=True),
                         debit_amount=float(row.get("debit", 0)),
                         credit_amount=float(row.get("credit", 0)),
                         balance=float(row.get("balance", 0)),

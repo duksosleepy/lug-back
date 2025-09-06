@@ -653,7 +653,7 @@ def extract_transactions(
                             if isinstance(value, str) and (
                                 "/" in value or "-" in value
                             ):
-                                value = pd.to_datetime(value)
+                                value = pd.to_datetime(value, dayfirst=True)
                             # Keep datetime objects as is
                         except Exception as e:
                             logger.warning(f"Failed to parse date {value}: {e}")
@@ -1007,7 +1007,7 @@ async def process_bank_statement(file: UploadFile):
                             reference=str(row.get("reference", "")),
                             datetime=row["date"]
                             if isinstance(row["date"], datetime)
-                            else pd.to_datetime(row["date"]),
+                            else pd.to_datetime(row["date"], dayfirst=True),
                             debit_amount=float(row.get("debit", 0)),
                             credit_amount=float(row.get("credit", 0)),
                             balance=float(row.get("balance", 0))
@@ -1166,10 +1166,10 @@ async def process_bank_statement(file: UploadFile):
                                         year = parts[2]
                                         entry["date"] = f"{day}/{month}/{year}"
                             else:
-                                # Try to parse and format
+                                # Try to parse and format with explicit dayfirst=True to ensure DD/MM/YYYY interpretation
                                 try:
                                     dt = pd.to_datetime(
-                                        entry["date"], errors="coerce"
+                                        entry["date"], errors="coerce", dayfirst=True
                                     )
                                     if not pd.isna(dt):
                                         entry["date"] = dt.strftime("%d/%m/%Y")
@@ -1194,7 +1194,7 @@ async def process_bank_statement(file: UploadFile):
                             else:
                                 try:
                                     dt = pd.to_datetime(
-                                        entry["date2"], errors="coerce"
+                                        entry["date2"], errors="coerce", dayfirst=True
                                     )
                                     if not pd.isna(dt):
                                         entry["date2"] = dt.strftime("%d/%m/%Y")
@@ -1298,9 +1298,9 @@ async def process_bank_statement(file: UploadFile):
                                             )
                                             continue
 
-                                # Try to parse as datetime and format
+                                # Try to parse as datetime and format with explicit dayfirst=True
                                 dt_value = pd.to_datetime(
-                                    value, errors="coerce"
+                                    value, errors="coerce", dayfirst=True
                                 )
                                 if not pd.isna(dt_value):
                                     formatted_df.at[idx, date_col] = (

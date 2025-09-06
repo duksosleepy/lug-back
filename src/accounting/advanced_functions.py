@@ -314,12 +314,9 @@ def generate_reconciliation_report(
     )
 
     # Ensure date columns are datetime
-    bank_df["date"] = pd.to_datetime(
-        bank_df["date"], format="%d/%m/%Y", errors="coerce"
-    )
-    accounting_df["date"] = pd.to_datetime(
-        accounting_df["date"], errors="coerce"
-    )
+    bank_df["date"] = pd.to_datetime(bank_df["date"], dayfirst=True)
+    # Convert accounting date column to datetime
+    accounting_df["date"] = pd.to_datetime(accounting_df["date"], dayfirst=True)
 
     # Create matching key columns for comparison
     bank_df["date_key"] = bank_df["date"].dt.strftime("%Y-%m-%d")
@@ -364,8 +361,8 @@ def generate_reconciliation_report(
             if acc_idx in accounting_matched_indices:
                 continue
 
-            bank_date = pd.to_datetime(bank_row["date_key"])
-            acc_date = pd.to_datetime(acc_row["date_key"])
+            bank_date = pd.to_datetime(bank_row["date_key"], dayfirst=True)
+            acc_date = pd.to_datetime(acc_row["date_key"], dayfirst=True)
             date_diff = abs((bank_date - acc_date).days)
 
             if (

@@ -162,13 +162,45 @@ def process_vcb_pos_transaction(
 
     # 6. Create the main record with custom description
     main_record = transaction_data.copy()
-    main_record["description"] = f"Thu tiền bán hàng của khách lẻ POS {tid}"
+    
+    # Extract location from department code for new format (following the exact business logic)
+    location_code = ""
+    if code:
+        # Process code to get location - split by "-" and get the last element
+        # Example: "KL-VCDN" -> "VCDN"
+        if "-" in code:
+            parts = code.split("-")
+            if parts:
+                last_element = parts[-1]  # Get the last element
+                # Remove trailing digits for cleaner format but keep the core location code
+                # Example: "BARIA1" -> "BARIA"
+                location_code = re.sub(r"\d+$", "", last_element).strip()
+        # Handle cases where there's no "-" but we still want to extract location-like info
+        elif "_" in code:
+            parts = code.split("_")
+            if parts:
+                last_element = parts[-1]
+                location_code = re.sub(r"\d+$", "", last_element).strip()
+        # For codes like "KL-VCDN" where we want "VCDN" as the location
+        else:
+            # If it's already in the format we want, just extract it
+            location_code = code
+    
+    # Build the complete description in new format
+    if location_code:
+        main_record["description"] = f"Thu tiền bán hàng khách lẻ (POS {tid} - {location_code})"
+    else:
+        main_record["description"] = f"Thu tiền bán hàng khách lẻ (POS {tid})"
     main_record["original_description"] = description
     main_record["sequence"] = 1
 
     # 7. Create fee record with appropriate description and amount
     fee_record = transaction_data.copy()
-    fee_record["description"] = f"Phí thu tiền bán hàng của khách lẻ POS {tid}"
+    # Build the complete fee description in new format
+    if location_code:
+        fee_record["description"] = f"Phí thu tiền bán hàng khách lẻ (POS {tid} - {location_code})"
+    else:
+        fee_record["description"] = f"Phí thu tiền bán hàng khách lẻ (POS {tid})"
     fee_record["original_description"] = description
     fee_record["sequence"] = 2
 
