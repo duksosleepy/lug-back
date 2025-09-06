@@ -412,7 +412,7 @@ def process_data():
 
             # Step 8: Send completion email with Excel attachments
             logger.info("Sending completion email...")
-            send_completion_email(all_filtered_data, negative_records)
+            send_completion_email(filtered_online_data, filtered_offline_data, negative_records)
 
             return result
         else:
@@ -420,7 +420,7 @@ def process_data():
                 "No data to submit after filtering and transformation"
             )
             # Send email even if no data to submit
-            send_completion_email([], negative_records)
+            send_completion_email([], [], negative_records)
             return {"status": "no_data", "message": "No data to submit"}
 
     except Exception as e:
@@ -540,31 +540,39 @@ def filter_negative_records(data: List[Dict]) -> List[Dict]:
 
 
 def send_completion_email(
-    transformed_data: List[Dict], negative_records: List[Dict]
+    filtered_online_data: List[Dict], 
+    filtered_offline_data: List[Dict], 
+    negative_records: List[Dict]
 ):
     """Send completion email with Excel attachments.
 
     Args:
-        transformed_data: Final processed data
+        filtered_online_data: Final processed online data
+        filtered_offline_data: Final processed offline data
         negative_records: Records with negative values
     """
     try:
-        # Create Excel files
-        final_data_file = create_excel_file(transformed_data, "final_data.xlsx")
+        # Create separate Excel files for online and offline data
+        online_data_file = create_excel_file(filtered_online_data, "online.xlsx")
+        offline_data_file = create_excel_file(filtered_offline_data, "offline.xlsx")
         negative_records_file = create_excel_file(
             negative_records, "negative_records.xlsx"
         )
 
-        # Send email with both attachments
+        # Send email with all attachments
         subject = "CRM Data Processing Completed"
         body = f"""
         CRM data processing has been completed successfully.
 
         Summary:
-        - Final processed data: {len(transformed_data)} records
+        - Online data: {len(filtered_online_data)} records
+        - Offline data: {len(filtered_offline_data)} records
         - Negative records (Doanh thu or So luong < 0): {len(negative_records)} records
 
         Please find the attached Excel files for your reference.
+        - online.xlsx: Contains filtered online data
+        - offline.xlsx: Contains filtered offline data
+        - negative_records.xlsx: Contains records with negative values
 
         This is an automated email.
         """
@@ -573,7 +581,7 @@ def send_completion_email(
             to=["nam.nguyen@lug.vn", "songkhoi123@gmail.com"],
             subject=subject,
             body=body,
-            attachment_paths=[final_data_file, negative_records_file],
+            attachment_paths=[online_data_file, offline_data_file, negative_records_file],
         )
 
         if result:
@@ -585,7 +593,8 @@ def send_completion_email(
         import os
 
         try:
-            os.unlink(final_data_file)
+            os.unlink(online_data_file)
+            os.unlink(offline_data_file)
             os.unlink(negative_records_file)
         except Exception as e:
             logger.warning(f"Failed to clean up temporary files: {e}")
