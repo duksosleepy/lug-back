@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
-from util.logging import get_logger
+from src.util.logging import get_logger
 
 logger = get_logger(__name__)
 

@@ -14,12 +14,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from sapo_sync import SapoSyncRequest, sync_mysapo, sync_mysapogo
-from settings import app_settings
+from src.sapo_sync import SapoSyncRequest, sync_mysapo, sync_mysapogo
+from src.settings import app_settings
 from src.accounting.api import router as accounting_router
-from util import validate_excel_file
-from util.logging import setup_logging
-from util.logging.middleware import setup_fastapi_logging
+from src.util import validate_excel_file
+from src.util.logging import setup_logging
+from src.util.logging.middleware import setup_fastapi_logging
 
 # Initialize Loguru for this module
 setup_logging(log_to_file=False)
@@ -137,8 +137,8 @@ async def send_error_file_email(
         bool: True nếu gửi thành công
     """
     try:
-        from util.mail_client import EmailClient
-        from util.send_email import load_config
+        from src.util.mail_client import EmailClient
+        from src.util.send_email import load_config
 
         # Chọn danh sách email nhận thông báo dựa trên loại process
         recipients = (

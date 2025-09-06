@@ -1,12 +1,12 @@
 import uvicorn
 
-from util.sentry import init as init_sentry
+from src.util.sentry import init as init_sentry
 
 
 def main():
     # Import modules inside function to avoid import issues
     from settings import app_settings
-    from util.logging import setup_logging
+    from src.util.logging import setup_logging
 
     # Set up Loguru for application-wide logging
     logger = setup_logging(

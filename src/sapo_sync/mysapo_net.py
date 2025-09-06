@@ -37,7 +37,7 @@ async def fetch_orders(start_date, end_date):
     while True:
         url = f"{base_url}/orders.json?page={page}&limit=250&created_on_min={adjusted_start_date}&created_on_max={adjusted_end_date}"
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.get(url)
                 response.raise_for_status()
                 data = response.json()

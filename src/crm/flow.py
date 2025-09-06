@@ -8,8 +8,8 @@ import httpx
 import pandas as pd
 
 from src.settings import app_settings
-from util.logging import get_logger
-from util.send_email import send_notification_email
+from src.util.logging import get_logger
+from src.util.send_email import send_notification_email
 
 logger = get_logger(__name__)
 # API endpoints and credentials - Using environment variables
@@ -160,7 +160,7 @@ FILTER_RULES = {
 def get_access_token() -> str:
     """Authenticate with the API and return the access token"""
     try:
-        with httpx.Client() as client:
+        with httpx.Client(timeout=30.0) as client:
             response = client.post(AUTH_URL, json=AUTH_CREDENTIALS)
             response.raise_for_status()
             return response.json()["data"]["access_token"]
@@ -197,7 +197,7 @@ def fetch_data(token: str, is_online: bool, limit: int = 50) -> List[Dict]:
     logger.info(f"Fetching {source_type} data from {date_gt} to {date_lte}")
 
     try:
-        with httpx.Client() as client:
+        with httpx.Client(timeout=30.0) as client:
             response = client.get(url, headers=headers, params=params)
             response.raise_for_status()
             data = response.json()["data"]
@@ -355,7 +355,7 @@ def submit_batch(batch_data: List[Dict]) -> Dict:
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
-        with httpx.Client() as client:
+        with httpx.Client(timeout=30.0) as client:
             response = client.post(BATCH_URL, headers=headers, json=batch_data)
             response.raise_for_status()
             return response.json()

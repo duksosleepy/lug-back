@@ -348,7 +348,7 @@ async def fetch_and_process_orders(start_date, end_date):
     current_page = 1
     total_pages = None
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         while total_pages is None or current_page <= total_pages:
             params["page"] = current_page
             try:

@@ -7,8 +7,8 @@ import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 
-from util.logging import get_logger
-from util.phone_utils import format_phone_number, is_valid_phone
+from src.util.logging import get_logger
+from src.util.phone_utils import format_phone_number, is_valid_phone
 
 logger = get_logger(__name__)
 

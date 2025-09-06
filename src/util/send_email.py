@@ -1,6 +1,6 @@
 import os
 
-from util.logging import get_logger
+from src.util.logging import get_logger
 
 from .mail_client import EmailClient
 
