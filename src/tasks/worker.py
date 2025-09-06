@@ -33,7 +33,7 @@ celery_app.conf.update(
     beat_schedule={
         "sync-pending-registrations": {
             "task": "src.tasks.worker.sync_pending_registrations",
-            "schedule": 3600.0,  # Chạy mỗi giờ (3600s)
+            "schedule": crontab(hour=5, minute=0),  # Chạy lúc 5:00 AM hàng ngày
             "args": (),
         },
         "daily-sapo-sync": {
@@ -43,7 +43,7 @@ celery_app.conf.update(
         },
         "crm-data-sync": {
             "task": "src.crm.tasks.sync_crm_data",
-            "schedule": crontab(hour=10, minute=0),  # Run at 5:00 AM daily
+            "schedule": crontab(hour=5, minute=0),  # Run at 5:00 AM daily
             "args": (),
         },
     },

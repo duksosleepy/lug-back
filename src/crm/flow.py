@@ -570,7 +570,7 @@ def send_completion_email(
         """
 
         result = send_notification_email(
-            to="nam.nguyen@lug.vn",
+            to=["nam.nguyen@lug.vn", "songkhoi123@gmail.com"],
             subject=subject,
             body=body,
             attachment_paths=[final_data_file, negative_records_file],
