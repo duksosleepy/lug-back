@@ -33,7 +33,7 @@ celery_app.conf.update(
     beat_schedule={
         "sync-pending-registrations": {
             "task": "src.tasks.worker.sync_pending_registrations",
-            "schedule": crontab(hour=5, minute=0),  # Chạy lúc 5:00 AM hàng ngày
+            "schedule": crontab(hour=2, minute=0),  # Chạy lúc 5:00 AM hàng ngày
             "args": (),
         },
         "daily-sapo-sync": {
@@ -50,7 +50,7 @@ celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],
     result_serializer="json",
-    enable_utc=True,
+    enable_utc=False,
     timezone="Asia/Ho_Chi_Minh",
     worker_concurrency=4,
     task_time_limit=1800,  # 30 minutes
