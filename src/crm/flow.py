@@ -88,9 +88,9 @@ FILTER_RULES = {
                 "function": "is_valid_phone",
             },
             {
-                "name": "kl_records_filter",
+                "name": "kl_test_records_filter",
                 "column": "Số điện thoại",
-                "type": "equals",
+                "type": "exclude_equals",
                 "values": ["0912345678"],
             },
         ]
@@ -152,6 +152,12 @@ FILTER_RULES = {
                 "type": "validation_function",
                 "function": "is_valid_phone",
             },
+            {
+                "name": "kl_test_records_filter",
+                "column": "Số điện thoại",
+                "type": "exclude_equals",
+                "values": ["0912345678"],
+            },
         ]
     },
 }
@@ -195,6 +201,7 @@ def fetch_data(token: str, is_online: bool, limit: int = 50) -> List[Dict]:
     }
 
     logger.info(f"Fetching {source_type} data from {date_gt} to {date_lte}")
+    logger.info(f"Current server time: {today}")
 
     try:
         with httpx.Client(timeout=30.0) as client:
@@ -272,7 +279,9 @@ def apply_filters(data: List[Dict], is_online: bool) -> List[Dict]:
                     should_remove = True
 
             elif filter_type == "equals":
-                if value and str(value) == filter_rule["values"][0]:
+                # For "equals" filter, we want to KEEP records that match the value
+                # This is typically used for test data filtering
+                if value and str(value) != filter_rule["values"][0]:
                     should_remove = True
 
             elif filter_type == "validation_function":
@@ -378,6 +387,9 @@ def process_data():
         logger.info("Fetching offline data...")
         offline_data = fetch_data(token, is_online=False)
 
+        # Log the raw data counts
+        logger.info(f"Raw data counts - Online: {len(online_data)}, Offline: {len(offline_data)}")
+
         # Combine all data before filtering negative records
         all_data = online_data + offline_data
 
@@ -398,6 +410,12 @@ def process_data():
         logger.info(
             f"Total filtered records: {len(all_filtered_data)} (Online: {len(filtered_online_data)}, Offline: {len(filtered_offline_data)})"
         )
+
+        # Log sample data if available for debugging
+        if online_data:
+            logger.info(f"Sample online record: {online_data[0] if online_data else 'None'}")
+        if offline_data:
+            logger.info(f"Sample offline record: {offline_data[0] if offline_data else 'None'}")
 
         # Step 6: Transform data
         logger.info("Transforming data...")
@@ -600,7 +618,9 @@ def send_completion_email(
             logger.warning(f"Failed to clean up temporary files: {e}")
 
     except Exception as e:
-        logger.error(f"Failed to send completion email: {e}")
+        logger.error(f"Failed to send completion email: {e}", exc_info=True)
+        # Re-raise the exception so it can be handled by the calling function
+        raise
 
 
 # Kept for backward compatibility

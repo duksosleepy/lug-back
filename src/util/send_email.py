@@ -15,7 +15,7 @@ def load_config():
         dict: Thông tin cấu hình email
     """
     # Lazy import to avoid circular dependency
-    from settings import email_settings
+    from src.settings import email_settings
 
     # Ưu tiên đọc từ biến môi trường
     return email_settings.get_config_dict()
