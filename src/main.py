@@ -5,7 +5,7 @@ from src.util.sentry import init as init_sentry
 
 def main():
     # Import modules inside function to avoid import issues
-    from settings import app_settings
+    from src.settings import app_settings
     from src.util.logging import setup_logging
 
     # Set up Loguru for application-wide logging

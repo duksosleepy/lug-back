@@ -32,13 +32,13 @@ async def post_json_data(
     """
     # Lazy import to avoid circular dependency
     if token is None:
-        from settings import app_settings
+        from src.settings import app_settings
 
         token = app_settings.xc_token
 
     if not endpoint.startswith("http"):
         # Nếu endpoint không có scheme, thêm base URL từ settings
-        from settings import app_settings
+        from src.settings import app_settings
 
         full_url = f"{app_settings.api_endpoint}/{endpoint.lstrip('/')}"
     else:
@@ -95,13 +95,13 @@ async def get_json_data(
     """
     # Lazy import to avoid circular dependency
     if token is None:
-        from settings import app_settings
+        from src.settings import app_settings
 
         token = app_settings.xc_token
 
     if not endpoint.startswith("http"):
         # Nếu endpoint không có scheme, thêm base URL từ settings
-        from settings import app_settings
+        from src.settings import app_settings
 
         full_url = f"{app_settings.api_endpoint}/{endpoint.lstrip('/')}"
     else:

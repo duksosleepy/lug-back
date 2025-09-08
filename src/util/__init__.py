@@ -140,7 +140,7 @@ def validate_excel_file(filename, allowed_extensions=None):
     from pathlib import Path
 
     if allowed_extensions is None:
-        from settings import app_settings
+        from src.settings import app_settings
 
         allowed_extensions = app_settings.allowed_extensions
 

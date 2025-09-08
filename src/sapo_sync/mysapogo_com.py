@@ -5,7 +5,13 @@ from typing import Dict, Optional
 
 import httpx
 
-from src.settings import sapo_settings
+# More robust import that handles different Python path configurations
+try:
+    from src.settings import sapo_settings
+except ImportError:
+    # Fallback for when src is not in the Python path
+    from settings import sapo_settings
+
 from src.util import (
     convert_to_gmt7,
     get_adjusted_dates,

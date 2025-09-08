@@ -182,7 +182,7 @@ def fetch_data(token: str, is_online: bool, limit: int = 50) -> List[Dict]:
 
     # Calculate date range
     today = datetime.now()
-    yesterday = today - timedelta(days=1)
+    yesterday = today - timedelta(days=10)
 
     # Format dates for API query: current day at 5:00 AM and previous day at 5:00 AM
     date_lte = today.strftime("%Y-%m-%dT05:00:00")
@@ -388,7 +388,9 @@ def process_data():
         offline_data = fetch_data(token, is_online=False)
 
         # Log the raw data counts
-        logger.info(f"Raw data counts - Online: {len(online_data)}, Offline: {len(offline_data)}")
+        logger.info(
+            f"Raw data counts - Online: {len(online_data)}, Offline: {len(offline_data)}"
+        )
 
         # Combine all data before filtering negative records
         all_data = online_data + offline_data
@@ -413,9 +415,13 @@ def process_data():
 
         # Log sample data if available for debugging
         if online_data:
-            logger.info(f"Sample online record: {online_data[0] if online_data else 'None'}")
+            logger.info(
+                f"Sample online record: {online_data[0] if online_data else 'None'}"
+            )
         if offline_data:
-            logger.info(f"Sample offline record: {offline_data[0] if offline_data else 'None'}")
+            logger.info(
+                f"Sample offline record: {offline_data[0] if offline_data else 'None'}"
+            )
 
         # Step 6: Transform data
         logger.info("Transforming data...")
@@ -430,7 +436,9 @@ def process_data():
 
             # Step 8: Send completion email with Excel attachments
             logger.info("Sending completion email...")
-            send_completion_email(filtered_online_data, filtered_offline_data, negative_records)
+            send_completion_email(
+                filtered_online_data, filtered_offline_data, negative_records
+            )
 
             return result
         else:
@@ -558,9 +566,9 @@ def filter_negative_records(data: List[Dict]) -> List[Dict]:
 
 
 def send_completion_email(
-    filtered_online_data: List[Dict], 
-    filtered_offline_data: List[Dict], 
-    negative_records: List[Dict]
+    filtered_online_data: List[Dict],
+    filtered_offline_data: List[Dict],
+    negative_records: List[Dict],
 ):
     """Send completion email with Excel attachments.
 
@@ -571,8 +579,12 @@ def send_completion_email(
     """
     try:
         # Create separate Excel files for online and offline data
-        online_data_file = create_excel_file(filtered_online_data, "online.xlsx")
-        offline_data_file = create_excel_file(filtered_offline_data, "offline.xlsx")
+        online_data_file = create_excel_file(
+            filtered_online_data, "online.xlsx"
+        )
+        offline_data_file = create_excel_file(
+            filtered_offline_data, "offline.xlsx"
+        )
         negative_records_file = create_excel_file(
             negative_records, "negative_records.xlsx"
         )
@@ -580,26 +592,30 @@ def send_completion_email(
         # Send email with all attachments
         subject = "CRM Data Processing Completed"
         body = f"""
-        CRM data processing has been completed successfully.
+        Xử lý dữ liệu CRM thành công.
 
-        Summary:
-        - Online data: {len(filtered_online_data)} records
-        - Offline data: {len(filtered_offline_data)} records
-        - Negative records (Doanh thu or So luong < 0): {len(negative_records)} records
+        Tóm tắt:
 
-        Please find the attached Excel files for your reference.
-        - online.xlsx: Contains filtered online data
-        - offline.xlsx: Contains filtered offline data
-        - negative_records.xlsx: Contains records with negative values
+        Dữ liệu online: {len(filtered_online_data)} bản ghi
+        Dữ liệu offline: {len(filtered_offline_data)} bản ghi
+        Bản ghi âm (Doanh thu hoặc Số lượng < 0): {len(negative_records)} bản ghi
+        Vui lòng xem các tệp Excel đính kèm để tham khảo:
+        online.xlsx: Chứa dữ liệu online đã lọc
+        offline.xlsx: Chứa dữ liệu offline đã lọc
+        negative_records.xlsx: Chứa các bản ghi có giá trị âm
 
-        This is an automated email.
+        Đây là email được gửi tự động.
         """
 
         result = send_notification_email(
             to=["nam.nguyen@lug.vn", "songkhoi123@gmail.com"],
             subject=subject,
             body=body,
-            attachment_paths=[online_data_file, offline_data_file, negative_records_file],
+            attachment_paths=[
+                online_data_file,
+                offline_data_file,
+                negative_records_file,
+            ],
         )
 
         if result:

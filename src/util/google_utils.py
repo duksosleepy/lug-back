@@ -18,7 +18,7 @@ def get_credentials():
     # Lazy import to avoid circular dependency
     from google.oauth2 import service_account
 
-    from settings import google_settings
+    from src.settings import google_settings
 
     credentials_info = google_settings.get_credentials_info()
     if not credentials_info:
@@ -44,7 +44,7 @@ def get_sheets_service():
     credentials = get_credentials()
     if not credentials:
         # Lazy import to avoid circular dependency
-        from settings import google_settings
+        from src.settings import google_settings
 
         error_msg = google_settings.show_detailed_error()
         logger.error(error_msg)
