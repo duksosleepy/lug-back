@@ -69,7 +69,7 @@ class CounterpartyExtractor:
         self.department_code_replacements = {
             "BRVT": "BARIA",
             "CTHO": "CANTHO",
-            "PSHV2F18": "PSHV",
+            "PSHV2F18": "PSHV 2F18",
             "08NTRAI": "LUG08NTRAI",
             "LDH": "LUGLDH",
             "TIMESCT": "TIMESCT_EV",
@@ -77,6 +77,7 @@ class CounterpartyExtractor:
             "LUGTIMESCITY": "TIMESCT_EV",
             "HOLDALLVC3/2": "HOLDALLVC32",
             "VINCOM304": "VINCOM 304 L2-12",
+            "VINCOM30": "VINCOM 304 L2-12",
             # Add more mappings here in the future as needed
             # "SHORT": "FULL_NAME",
         }
@@ -1192,9 +1193,7 @@ class CounterpartyExtractor:
             self.logger.warning("No POS code found in POS machine match")
             return None
 
-        self.logger.info(
-            f"Processing POS machine logic for code: {pos_code}"
-        )
+        self.logger.info(f"Processing POS machine logic for code: {pos_code}")
 
         # Step 1: Get POS machine details
         pos_department_code = best_pos_match.get("department_code")
@@ -1223,19 +1222,25 @@ class CounterpartyExtractor:
             f"Cleaned department code: '{pos_department_code}' -> '{cleaned_dept_code}'"
         )
 
+        # Apply special replacements from department_code_replacements dictionary
+        search_code = cleaned_dept_code
+        for old_text, new_text in self.department_code_replacements.items():
+            if old_text == cleaned_dept_code:
+                search_code = new_text
+                self.logger.info(
+                    f"Applied special replacement: '{old_text}' -> '{new_text}'"
+                )
+                break
+
         # Step 3: Search for counterparties directly without address filtering
-        self.logger.info(
-            f"Searching counterparties with code '{cleaned_dept_code}'"
-        )
+        self.logger.info(f"Searching counterparties with code '{search_code}'")
 
         counterparty_matches = search_exact_counterparties(
-            cleaned_dept_code, field_name="code", limit=10
+            search_code, field_name="code", limit=10
         )
 
         if not counterparty_matches:
-            self.logger.info(
-                "No counterparties found, will use default"
-            )
+            self.logger.info("No counterparties found, will use default")
             return None
 
         self.logger.info(
@@ -1280,6 +1285,7 @@ class CounterpartyExtractor:
             "pos_code": pos_code,
             "pos_department_code": pos_department_code,
             "cleaned_department_code": cleaned_dept_code,
+            "search_code": search_code,
             "bonus_condition_applied": len(filtered_matches) > 0,
             "bonus_condition_name": bonus_condition_name,
         }
@@ -1287,6 +1293,7 @@ class CounterpartyExtractor:
         self.logger.info(
             f"POS machine logic result: Found counterparty '{result['name']}' (code: {result['code']}) "
             f"for POS {pos_code} with cleaned department code '{cleaned_dept_code}' "
+            f"and search code '{search_code}' "
             f"(bonus condition applied: {result['bonus_condition_applied']})"
         )
 

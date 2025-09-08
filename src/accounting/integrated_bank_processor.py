@@ -3878,7 +3878,10 @@ class IntegratedBankProcessor:
 
                 # For BIDV files, set debit account to 3311
                 # For other banks (like MBB), use the default 6427
-                if self.current_bank_name and "BIDV" in self.current_bank_name.upper():
+                if (
+                    self.current_bank_name
+                    and "BIDV" in self.current_bank_name.upper()
+                ):
                     # BIDV specific handling - debit account should be 3311
                     if rule.document_type == "BC":  # Receipt
                         debit_account = self.default_bank_account
