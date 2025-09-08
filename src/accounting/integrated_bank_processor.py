@@ -2081,8 +2081,21 @@ class IntegratedBankProcessor:
             return None, None
 
         # For non-transfer transactions, find accounts by codes
+        # Filter codes to only use account numbers (10+ digits) for account determination
+        # This prevents extracting partial numbers from account names like "3208" from "7432085703944"
+        account_number_codes = [(code, code_type, position) for code, code_type, position in codes 
+                               if code_type == "account_number"]  # 10+ digit numbers
+        
         matched_accounts = []
-        for code, code_type, position in codes:
+        codes_to_check = account_number_codes if account_number_codes else codes
+        
+        for code, code_type, position in codes_to_check:
+            # For POS transactions, be extra careful about which codes we use
+            # Skip medium codes (6-9 digits) that might be part of longer account numbers
+            if "POS" in description.upper() and code_type == "medium_code":
+                self.logger.debug(f"Skipping medium code {code} for POS transaction to avoid false matches")
+                continue
+                
             account_match = self.find_account_by_code(code)
             if account_match:
                 account_match.position = position
@@ -2349,19 +2362,51 @@ class IntegratedBankProcessor:
             )
             return special_debit, special_credit
 
-        # PRIORITY 2: Try to determine accounts by extracting numeric codes
+        # PRIORITY 2: POS-specific handling - Give higher priority to POS transactions
+        # For POS transactions, we should use consistent account mappings regardless of numeric codes in description
+        if pos_code:
+            try:
+                from src.accounting.fast_search import search_pos_machines
+                
+                pos_results = search_pos_machines(
+                    pos_code, field_name="code", limit=1
+                )
+                if pos_results:
+                    pos_info = pos_results[0]
+                    # Use standard mappings for POS transactions
+                    if document_type == "BC":
+                        # For POS sales receipts
+                        debit_account = self.default_bank_account
+                        credit_account = "1311"
+                        self.logger.info(
+                            f"Using POS-specific account mapping for receipts: Dr={debit_account}, Cr={credit_account}"
+                        )
+                        return debit_account, credit_account
+                    else:
+                        # For POS-related payments (card fees)
+                        debit_account = "3311"
+                        credit_account = self.default_bank_account
+                        self.logger.info(
+                            f"Using POS-specific account mapping for payments: Dr={debit_account}, Cr={credit_account}"
+                        )
+                        return debit_account, credit_account
+            except Exception as e:
+                self.logger.warning(f"Error in POS-specific account determination: {e}")
+
+        # PRIORITY 3: Try to determine accounts by extracting numeric codes
+        # But be more selective for POS transactions to avoid false matches
         debit_by_code, credit_by_code = self.determine_accounts_by_codes(
             description, is_credit, document_type, transaction_type
         )
 
-        # PRIORITY 3: If we found accounts by code extraction, use them
+        # PRIORITY 4: If we found accounts by code extraction, use them
         if debit_by_code and credit_by_code:
             self.logger.info(
                 f"Determined complete accounts by code extraction: Dr={debit_by_code}, Cr={credit_by_code}"
             )
             return debit_by_code, credit_by_code
 
-        # PRIORITY 4: If we have a counterparty code, try to determine accounts based on that
+        # PRIORITY 5: If we have a counterparty code, try to determine accounts based on that
         if counterparty_code:
             debit_by_cp, credit_by_cp = self.determine_accounts_by_counterparty(
                 counterparty_code, document_type, transaction_type
@@ -2378,7 +2423,7 @@ class IntegratedBankProcessor:
                     )
                     return final_debit, final_credit
 
-        # PRIORITY 5: If we have partial accounts from code extraction, fill in the missing ones
+        # PRIORITY 6: If we have partial accounts from code extraction, fill in the missing ones
         if debit_by_code or credit_by_code:
             if document_type == "BC":  # Receipt
                 if not credit_by_code:
@@ -2400,33 +2445,17 @@ class IntegratedBankProcessor:
             )
             return debit_by_code, credit_by_code
 
-        # PRIORITY 6: Fallback to using fast_search for POS and department-based determination
+        # PRIORITY 7: Fallback to using fast_search for department-based determination and other rules
         try:
             # Use fast_search.py to look up information instead of SQL queries
             from src.accounting.fast_search import (
                 search_departments,
-                search_pos_machines,
             )
 
             # Log the default bank account before determining accounts
             self.logger.info(
                 f"Current default bank account: {self.default_bank_account}"
             )
-
-            # Try POS-specific rules using fast_search
-            if pos_code:
-                pos_results = search_pos_machines(
-                    pos_code, field_name="code", limit=1
-                )
-                if pos_results:
-                    pos_info = pos_results[0]
-                    # Use standard mappings for POS transactions
-                    if document_type == "BC":
-                        # For POS sales receipts
-                        return self.default_bank_account, "1311"
-                    else:
-                        # For POS-related payments (card fees)
-                        return "3311", self.default_bank_account
 
             # Try department-specific rules using fast_search
             if department_code:
