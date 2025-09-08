@@ -73,13 +73,11 @@ class CounterpartyExtractor:
             "08NTRAI": "LUG08NTRAI",
             "LDH": "LUGLDH",
             "TIMESCT": "TIMESCT_EV",
-            "GO HLONG": "GOHALONG",
+            "GOHLONG": "GOHALONG",
             "LUGTIMESCITY": "TIMESCT_EV",
             "HOLDALLVC3/2": "HOLDALLVC32",
             "VINCOM304": "VINCOM 304 L2-12",
-            "VINCOM30": "VINCOM 304 L2-12",
             # Add more mappings here in the future as needed
-            # "SHORT": "FULL_NAME",
         }
 
         # Common patterns where counterparty names appear

@@ -96,48 +96,62 @@ class EmailClient:
 
         return msg
 
-    def attach_file(self, msg, file_path):
+    def attach_file(self, msg, file_path, attachment_name=None):
         """
         Đính kèm file vào email
 
         Args:
             msg (MIMEMultipart): Đối tượng email
             file_path (str): Đường dẫn đến file cần đính kèm
+            attachment_name (str, optional): Tên file đính kèm (nếu khác tên file thực)
 
         Returns:
             MIMEMultipart: Email với file đã đính kèm
         """
         try:
+            # Use custom attachment name if provided, otherwise use file basename
+            filename = attachment_name if attachment_name else os.path.basename(file_path)
+            
             with open(file_path, "rb") as file:
                 attachment = MIMEApplication(
-                    file.read(), Name=os.path.basename(file_path)
+                    file.read(), Name=filename
                 )
 
             attachment["Content-Disposition"] = (
-                f'attachment; filename="{os.path.basename(file_path)}"'
+                f'attachment; filename="{filename}"'
             )
             msg.attach(attachment)
 
-            logger.info(f"Đã đính kèm file {file_path}")
+            logger.info(f"Đã đính kèm file {file_path} với tên {filename}")
             return msg
         except Exception as e:
             logger.error(f"Lỗi khi đính kèm file {file_path}: {str(e)}")
             raise
 
-    def attach_files(self, msg, file_paths):
+    def attach_files(self, msg, file_attachments):
         """
         Đính kèm nhiều file vào email
 
         Args:
             msg (MIMEMultipart): Đối tượng email
-            file_paths (list): Danh sách đường dẫn đến các file cần đính kèm
+            file_attachments (list): Danh sách đường dẫn đến các file cần đính kèm hoặc 
+                                   dict với 'path' và 'name' keys
 
         Returns:
             MIMEMultipart: Email với các file đã đính kèm
         """
-        for file_path in file_paths:
-            if file_path and os.path.exists(file_path):
-                msg = self.attach_file(msg, file_path)
+        for attachment in file_attachments:
+            if isinstance(attachment, dict):
+                # Handle dict format with path and name
+                file_path = attachment.get('path')
+                attachment_name = attachment.get('name')
+                if file_path and os.path.exists(file_path):
+                    msg = self.attach_file(msg, file_path, attachment_name)
+            else:
+                # Handle simple string path (backward compatibility)
+                file_path = attachment
+                if file_path and os.path.exists(file_path):
+                    msg = self.attach_file(msg, file_path)
         return msg
 
     def send(self, msg, to=None, cc=None, bcc=None):

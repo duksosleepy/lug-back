@@ -32,7 +32,8 @@ def send_notification_email(
         subject (str): Tiêu đề
         body (str): Nội dung
         attachment_path (str, optional): Đường dẫn đến file đính kèm (cho backward compatibility)
-        attachment_paths (list, optional): Danh sách đường dẫn đến các file đính kèm
+        attachment_paths (list, optional): Danh sách đường dẫn đến các file đính kèm 
+                                         hoặc dict với 'path' và 'name' keys
         html (bool, optional): Nếu True, body sẽ được hiểu là HTML
 
     Returns:

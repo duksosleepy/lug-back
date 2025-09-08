@@ -183,13 +183,13 @@ def fetch_data(token: str, is_online: bool, limit: int = 50) -> List[Dict]:
     url = ONLINE_DATA_URL if is_online else OFFLINE_DATA_URL
     source_type = "online" if is_online else "offline"
 
-    # Calculate date range
-    today = datetime.now()
-    yesterday = today - timedelta(days=1)
+    # Calculate date range: from task runtime to same time previous day
+    task_runtime = datetime.now()
+    previous_day_same_time = task_runtime - timedelta(days=1)
 
-    # Format dates for API query: current day at 5:00 AM and previous day at 5:00 AM
-    date_lte = today.strftime("%Y-%m-%dT05:00:00")
-    date_gt = yesterday.strftime("%Y-%m-%dT05:00:00")
+    # Format dates for API query: use actual task runtime
+    date_lte = task_runtime.strftime("%Y-%m-%dT%H:%M:%S")
+    date_gt = previous_day_same_time.strftime("%Y-%m-%dT%H:%M:%S")
 
     # Construct date filter
     date_filter = {
@@ -204,7 +204,7 @@ def fetch_data(token: str, is_online: bool, limit: int = 50) -> List[Dict]:
     }
 
     logger.info(f"Fetching {source_type} data from {date_gt} to {date_lte}")
-    logger.info(f"Current server time: {today}")
+    logger.info(f"Task runtime: {task_runtime}")
 
     try:
         with httpx.Client(timeout=BATCH_TIMEOUT) as client:
@@ -607,31 +607,40 @@ def send_completion_email(
         negative_records: Records with negative values
     """
     try:
-        # Create separate Excel files for online and offline data
+        # Generate timestamp for filenames
+        task_runtime = datetime.now()
+        previous_day_same_time = task_runtime - timedelta(days=1)
+
+        # Format date for filename: YYYYMMDD (use previous day as reference)
+        date_str = previous_day_same_time.strftime("%Y%m%d")
+
+        # Create separate Excel files with shorter naming
         online_data_file = create_excel_file(
-            filtered_online_data, "online.xlsx"
+            filtered_online_data, f"CRM_Online_Data_{date_str}.xlsx"
         )
         offline_data_file = create_excel_file(
-            filtered_offline_data, "offline.xlsx"
+            filtered_offline_data, f"CRM_Offline_Data_{date_str}.xlsx"
         )
         negative_records_file = create_excel_file(
-            negative_records, "negative_records.xlsx"
+            negative_records, f"CRM_Negative_Records_{date_str}.xlsx"
         )
 
-        # Send email with all attachments
-        subject = "CRM Data Processing Completed"
+        # Send email with all attachments using shorter names
+        subject = f"CRM Data Processing Completed - {date_str}"
         body = f"""
         Xử lý dữ liệu CRM thành công.
 
-        Tóm tắt:
+        Khoảng thời gian: {previous_day_same_time.strftime("%Y-%m-%d %H:%M")} đến {task_runtime.strftime("%Y-%m-%d %H:%M")}
 
-        Dữ liệu online: {len(filtered_online_data)} bản ghi
-        Dữ liệu offline: {len(filtered_offline_data)} bản ghi
-        Bản ghi âm (Doanh thu hoặc Số lượng < 0): {len(negative_records)} bản ghi
-        Vui lòng xem các tệp Excel đính kèm để tham khảo:
-        online.xlsx: Chứa dữ liệu online đã lọc
-        offline.xlsx: Chứa dữ liệu offline đã lọc
-        negative_records.xlsx: Chứa các bản ghi có giá trị âm
+        Tóm tắt:
+        - Dữ liệu online: {len(filtered_online_data)} bản ghi
+        - Dữ liệu offline: {len(filtered_offline_data)} bản ghi
+        - Bản ghi âm (Doanh thu hoặc Số lượng < 0): {len(negative_records)} bản ghi
+
+        Các tệp đính kèm:
+        - CRM_Online_Data_{date_str}.xlsx: Dữ liệu online đã lọc
+        - CRM_Offline_Data_{date_str}.xlsx: Dữ liệu offline đã lọc
+        - CRM_Negative_Records_{date_str}.xlsx: Các bản ghi có giá trị âm
 
         Đây là email được gửi tự động.
         """
@@ -641,9 +650,18 @@ def send_completion_email(
             subject=subject,
             body=body,
             attachment_paths=[
-                online_data_file,
-                offline_data_file,
-                negative_records_file,
+                {
+                    "path": online_data_file,
+                    "name": f"CRM_Online_Data_{date_str}.xlsx",
+                },
+                {
+                    "path": offline_data_file,
+                    "name": f"CRM_Offline_Data_{date_str}.xlsx",
+                },
+                {
+                    "path": negative_records_file,
+                    "name": f"CRM_Negative_Records_{date_str}.xlsx",
+                },
             ],
         )
 
