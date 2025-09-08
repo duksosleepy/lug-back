@@ -69,14 +69,14 @@ class CounterpartyExtractor:
         self.department_code_replacements = {
             "BRVT": "BARIA",
             "CTHO": "CANTHO",
-            "PSHV 2F18": "PSHV",
+            "PSHV2F18": "PSHV",
             "08NTRAI": "LUG08NTRAI",
             "LDH": "LUGLDH",
             "TIMESCT": "TIMESCT_EV",
             "GO HLONG": "GOHALONG",
             "LUGTIMESCITY": "TIMESCT_EV",
             "HOLDALLVC3/2": "HOLDALLVC32",
-            "VINCOM 304": "VINCOM 304 L2-12",
+            "VINCOM304": "VINCOM 304 L2-12",
             # Add more mappings here in the future as needed
             # "SHORT": "FULL_NAME",
         }
@@ -1170,15 +1170,11 @@ class CounterpartyExtractor:
         self, extracted_pos_machines: List[Dict], current_address: str = None
     ) -> Dict[str, any]:
         """
-        Implement ENHANCED POS machine counterparty logic with two-stage address-based search:
-
-        STAGE 1: Search pos_machines where address != current_address
-        STAGE 2: If no results, search where address = current_address
-        FALLBACK: Use default if both searches fail
+        Implement POS machine counterparty logic without address filtering.
 
         Args:
             extracted_pos_machines: List of POS machines from search_entities
-            current_address: Current transaction/context address for filtering
+            current_address: Current transaction/context address (no longer used for filtering)
 
         Returns:
             Dictionary with counterparty info found via POS machine logic
@@ -1197,10 +1193,10 @@ class CounterpartyExtractor:
             return None
 
         self.logger.info(
-            f"Processing ENHANCED POS machine logic for code: {pos_code}"
+            f"Processing POS machine logic for code: {pos_code}"
         )
 
-        # Step 1: Get POS machine details including address
+        # Step 1: Get POS machine details
         pos_department_code = best_pos_match.get("department_code")
         pos_address = best_pos_match.get("address", "")
 
@@ -1213,13 +1209,6 @@ class CounterpartyExtractor:
         self.logger.info(
             f"POS machine {pos_code} - department_code: '{pos_department_code}', address: '{pos_address}'"
         )
-
-        # Determine current_address for comparison (use POS machine address if not provided)
-        if current_address is None:
-            current_address = pos_address
-            self.logger.info(
-                f"Using POS machine address as current_address: '{current_address}'"
-            )
 
         # Step 2: Clean the department code
         cleaned_dept_code = self.clean_department_code(pos_department_code)
@@ -1234,69 +1223,26 @@ class CounterpartyExtractor:
             f"Cleaned department code: '{pos_department_code}' -> '{cleaned_dept_code}'"
         )
 
-        # Step 3: ENHANCED TWO-STAGE SEARCH LOGIC
-
-        # STAGE 1: Search for counterparties where address != current_address
+        # Step 3: Search for counterparties directly without address filtering
         self.logger.info(
-            f"STAGE 1: Searching counterparties with code '{cleaned_dept_code}' where address != '{current_address}'"
+            f"Searching counterparties with code '{cleaned_dept_code}'"
         )
 
-        all_counterparty_matches = search_exact_counterparties(
+        counterparty_matches = search_exact_counterparties(
             cleaned_dept_code, field_name="code", limit=10
         )
 
-        # Filter for address != current_address
-        stage1_matches = []
-        if all_counterparty_matches:
-            for match in all_counterparty_matches:
-                match_address = match.get("address", "").strip()
-                if match_address != current_address.strip():
-                    stage1_matches.append(match)
-                    self.logger.debug(
-                        f"STAGE 1: Found counterparty with different address - Code: '{match['code']}', Address: '{match_address}'"
-                    )
-
-        if stage1_matches:
+        if not counterparty_matches:
             self.logger.info(
-                f"STAGE 1 SUCCESS: Found {len(stage1_matches)} counterparties with address != current_address"
+                "No counterparties found, will use default"
             )
-            counterparty_matches = stage1_matches
-            search_stage_used = "stage1_different_address"
-        else:
-            # STAGE 2: Search for counterparties where address = current_address
-            self.logger.info(
-                "STAGE 1 FAILED: No counterparties found with different address"
-            )
-            self.logger.info(
-                f"STAGE 2: Searching counterparties with code '{cleaned_dept_code}' where address = '{current_address}'"
-            )
+            return None
 
-            stage2_matches = []
-            if all_counterparty_matches:
-                for match in all_counterparty_matches:
-                    match_address = match.get("address", "").strip()
-                    if match_address == current_address.strip():
-                        stage2_matches.append(match)
-                        self.logger.debug(
-                            f"STAGE 2: Found counterparty with same address - Code: '{match['code']}', Address: '{match_address}'"
-                        )
+        self.logger.info(
+            f"SUCCESS: Found {len(counterparty_matches)} counterparties"
+        )
 
-            if stage2_matches:
-                self.logger.info(
-                    f"STAGE 2 SUCCESS: Found {len(stage2_matches)} counterparties with address = current_address"
-                )
-                counterparty_matches = stage2_matches
-                search_stage_used = "stage2_same_address"
-            else:
-                self.logger.info(
-                    "STAGE 2 FAILED: No counterparties found with same address"
-                )
-                self.logger.info(
-                    "FALLBACK: No counterparties found in either stage, will use default"
-                )
-                return None
-
-        # Step 4: Apply BONUS CONDITION on the filtered results
+        # Step 4: Apply BONUS CONDITION on the results
         bonus_condition_name = "KHÁCH LẺ KHÔNG LẤY HOÁ ĐƠN"
         filtered_matches = []
 
@@ -1305,26 +1251,22 @@ class CounterpartyExtractor:
             if match_name == bonus_condition_name:
                 filtered_matches.append(match)
                 self.logger.info(
-                    f"BONUS CONDITION: Found counterparty with code '{match['code']}' and name '{match_name}' in {search_stage_used}"
+                    f"BONUS CONDITION: Found counterparty with code '{match['code']}' and name '{match_name}'"
                 )
 
-        # Step 5: Use filtered results if available, otherwise fallback to stage results
+        # Step 5: Use filtered results if available, otherwise fallback to first result
         if filtered_matches:
             self.logger.info(
-                f"BONUS CONDITION: Using {len(filtered_matches)} filtered matches (name = '{bonus_condition_name}') from {search_stage_used}"
+                f"BONUS CONDITION: Using {len(filtered_matches)} filtered matches (name = '{bonus_condition_name}')"
             )
             best_counterparty = filtered_matches[0]
-            condition_applied = (
-                f"pos_machine_enhanced_logic_with_bonus_{search_stage_used}"
-            )
+            condition_applied = "pos_machine_logic_with_bonus"
         else:
             self.logger.info(
-                f"BONUS CONDITION: No matches found with name '{bonus_condition_name}', using {search_stage_used} results"
+                f"BONUS CONDITION: No matches found with name '{bonus_condition_name}', using first result"
             )
             best_counterparty = counterparty_matches[0]
-            condition_applied = (
-                f"pos_machine_enhanced_logic_{search_stage_used}"
-            )
+            condition_applied = "pos_machine_logic"
 
         # Step 6: Return the best counterparty match
         result = {
@@ -1333,20 +1275,18 @@ class CounterpartyExtractor:
             "address": best_counterparty.get("address") or "",
             "phone": best_counterparty.get("phone") or "",
             "tax_id": best_counterparty.get("tax_id") or "",
-            "source": "pos_machine_enhanced_lookup",
+            "source": "pos_machine_lookup",
             "condition_applied": condition_applied,
-            "search_stage_used": search_stage_used,
             "pos_code": pos_code,
             "pos_department_code": pos_department_code,
             "cleaned_department_code": cleaned_dept_code,
-            "current_address": current_address,
             "bonus_condition_applied": len(filtered_matches) > 0,
             "bonus_condition_name": bonus_condition_name,
         }
 
         self.logger.info(
-            f"ENHANCED POS machine logic result: Found counterparty '{result['name']}' (code: {result['code']}) "
-            f"for POS {pos_code} using {search_stage_used} with cleaned department code '{cleaned_dept_code}' "
+            f"POS machine logic result: Found counterparty '{result['name']}' (code: {result['code']}) "
+            f"for POS {pos_code} with cleaned department code '{cleaned_dept_code}' "
             f"(bonus condition applied: {result['bonus_condition_applied']})"
         )
 
