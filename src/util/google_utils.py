@@ -52,7 +52,7 @@ def get_sheets_service():
             "Không tìm thấy file credentials.json hoặc thông tin xác thực hợp lệ."
         )
 
-    return build("sheets", "v4", credentials=credentials.with_scopes(SCOPES))
+    return build("sheets", "v4", credentials=credentials.with_scopes(SCOPES), cache_discovery=False)
 
 
 def update_sheet_with_retry(service, spreadsheet_id, body, retries=5):

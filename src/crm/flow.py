@@ -21,6 +21,7 @@ TARGET_URL = app_settings.get_env(
     "CRM_TARGET_URL",
 )
 API_KEY = app_settings.get_env("CRM_API_KEY")
+BATCH_TIMEOUT = app_settings.get_int_env("CRM_BATCH_TIMEOUT", 60)  # Default to 60 seconds
 
 # Authentication credentials from environment
 AUTH_CREDENTIALS = {
@@ -166,7 +167,7 @@ FILTER_RULES = {
 def get_access_token() -> str:
     """Authenticate with the API and return the access token"""
     try:
-        with httpx.Client(timeout=30.0) as client:
+        with httpx.Client(timeout=BATCH_TIMEOUT) as client:
             response = client.post(AUTH_URL, json=AUTH_CREDENTIALS)
             response.raise_for_status()
             return response.json()["data"]["access_token"]
@@ -204,7 +205,7 @@ def fetch_data(token: str, is_online: bool, limit: int = 50) -> List[Dict]:
     logger.info(f"Current server time: {today}")
 
     try:
-        with httpx.Client(timeout=30.0) as client:
+        with httpx.Client(timeout=BATCH_TIMEOUT) as client:
             response = client.get(url, headers=headers, params=params)
             response.raise_for_status()
             data = response.json()["data"]
@@ -351,7 +352,7 @@ def transform_data(sales_data: List[Dict]) -> List[Dict]:
 
 
 def submit_batch(batch_data: List[Dict]) -> Dict:
-    """Submit the transformed data to the batch service"""
+    """Submit the transformed data to the batch service in smaller chunks"""
     if not batch_data:
         logger.warning("No data to submit after filtering")
         return {
@@ -359,18 +360,36 @@ def submit_batch(batch_data: List[Dict]) -> Dict:
             "message": "No data to submit after filtering",
         }
 
-    try:
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
-        with httpx.Client(timeout=30.0) as client:
-            response = client.post(BATCH_URL, headers=headers, json=batch_data)
-            response.raise_for_status()
-            return response.json()
-    except httpx.HTTPError as e:
-        logger.error(f"Failed to submit batch: {e}")
-        raise
+    # Process in chunks of 30 requests
+    chunk_size = 30
+    results = []
+    
+    total_chunks = (len(batch_data) - 1) // chunk_size + 1
+    
+    for i in range(0, len(batch_data), chunk_size):
+        chunk = batch_data[i:i + chunk_size]
+        chunk_number = i // chunk_size + 1
+        logger.info(f"Submitting chunk {chunk_number}/{total_chunks} with {len(chunk)} requests")
+        
+        try:
+            headers = {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            }
+            with httpx.Client(timeout=BATCH_TIMEOUT) as client:  # Use configurable timeout
+                response = client.post(BATCH_URL, headers=headers, json=chunk)
+                response.raise_for_status()
+                results.append(response.json())
+                logger.info(f"Successfully submitted chunk {chunk_number}/{total_chunks}")
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to submit batch chunk {chunk_number}/{total_chunks}: {e}")
+            raise
+    
+    return {
+        "status": "success",
+        "message": f"Successfully submitted {len(batch_data)} requests in {len(results)} chunks",
+        "results": results
+    }
 
 
 def process_data():
