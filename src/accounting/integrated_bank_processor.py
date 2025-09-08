@@ -266,7 +266,7 @@ class IntegratedBankProcessor:
             "PHI QUAN LY TAI KHOAN": "6427",  # Account management fee
             "NOPTHUE": "333823",  # Tax payment
             "Thanh toan lai": "5154",  # Interest payment
-            "thanh toan tien hang": "13682",  # Goods payment
+            "thanh toan tien hang": "33682",  # Goods payment
             "hoan tien": "1311",
             "TRICH TAI KHOAN": "34111",  # Loan payment
             "THU NV": "6354",  # Loan interest payment
