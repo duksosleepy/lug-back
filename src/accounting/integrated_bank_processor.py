@@ -266,7 +266,7 @@ class IntegratedBankProcessor:
             "PHI QUAN LY TAI KHOAN": "6427",  # Account management fee
             "NOPTHUE": "333823",  # Tax payment
             "Thanh toan lai": "5154",  # Interest payment
-            "thanh toan tien hang": "33682",  # Goods payment
+            "thanh toan tien hang": "33685",  # Goods payment
             "hoan tien": "1311",
             "TRICH TAI KHOAN": "34111",  # Loan payment
             "THU NV": "6354",  # Loan interest payment
@@ -1678,6 +1678,85 @@ class IntegratedBankProcessor:
             normalized = normalized.replace(vn_char, en_char)
 
         return normalized
+
+    def _format_thanh_toan_tien_hang_description(self, description: str) -> str:
+        """
+        Format "thanh toan tien hang" descriptions with proper Vietnamese diacritics
+        while preserving variable parts like contract numbers, dates, etc.
+
+        Examples:
+        Input: "Cty Sang Tam TT tien hang T06.2025 theo HD so 2694 cho Cty Hang Dang"
+        Output: "Cty Sáng Tâm TT tiền hàng T06.2025 theo HD số 2694 cho Cty Hang Dang"
+
+        Input: "thanh toan tien hang thang 1"
+        Output: "Chi nhánh Cty TNHH Sáng Tâm tại Hà Nội thanh toán tiền hàng cho Cty TNHH Sáng Tâm"
+
+        Args:
+            description: Original transaction description
+
+        Returns:
+            Formatted description with proper Vietnamese diacritics
+        """
+        if not description:
+            return description
+
+        # If it's a simple "thanh toan tien hang" without additional context,
+        # use the standard format
+        if description.lower().strip() in [
+            "thanh toan tien hang",
+            "tt tien hang",
+        ]:
+            return "Chi nhánh Cty TNHH Sáng Tâm tại Hà Nội thanh toán tiền hàng cho Cty TNHH Sáng Tâm"
+
+        # Start with the original description
+        formatted_desc = description
+
+        # List of word replacements to apply (order matters)
+        replacements = [
+            # Company name variations
+            (r"\bCty\s+Sang\s+Tam\b", "Cty Sáng Tâm", re.IGNORECASE),
+            (r"\bCTY\s+SANG\s+TAM\b", "CTY SÁNG TÂM", re.IGNORECASE),
+            (r"\bSang\s+Tam\b", "Sáng Tâm", re.IGNORECASE),
+            (r"\bSANG\s+TAM\b", "SÁNG TÂM", re.IGNORECASE),
+            # Payment terms
+            (r"\bTT\s+tien\s+hang\b", "TT tiền hàng", re.IGNORECASE),
+            (
+                r"\bthanh\s+toan\s+tien\s+hang\b",
+                "thanh toán tiền hàng",
+                re.IGNORECASE,
+            ),
+            (r"\btien\s+hang\b", "tiền hàng", re.IGNORECASE),
+            # Contract/document terms
+            (r"\bso\b", "số", re.IGNORECASE),
+            (r"\bHD\b", "HĐ", re.IGNORECASE),
+            (r"\bhop\s+dong\b", "hợp đồng", re.IGNORECASE),
+            (r"\btheo\s+hd\b", "theo HĐ", re.IGNORECASE),
+            # Location terms
+            (r"\bHa\s+Noi\b", "Hà Nội", re.IGNORECASE),
+            (r"\bHN\b", "HN", re.IGNORECASE),
+        ]
+
+        # Apply all replacements
+        for pattern, replacement, flags in replacements:
+            formatted_desc = re.sub(
+                pattern, replacement, formatted_desc, flags=flags
+            )
+
+        # Special case: if the description contains "thanh toan tien hang" or "TT tien hang"
+        # but doesn't have "Chi nhánh" at the beginning, we might want to prepend it
+        if (
+            "thanh toan tien hang" in formatted_desc.lower()
+            or "tt tien hang" in formatted_desc.lower()
+        ) and not formatted_desc.startswith("Chi nhánh"):
+            # Only add the prefix if it's not already a complex description
+            if len(formatted_desc.split()) <= 10:  # Simple descriptions only
+                formatted_desc = (
+                    "Chi nhánh Cty TNHH Sáng Tâm tại Hà Nội "
+                    + formatted_desc
+                    + " cho Cty TNHH Sáng Tâm"
+                )
+
+        return formatted_desc
 
     def _detect_trace_or_acsp_keywords(self, description: str) -> bool:
         """Detect 'trace' or 'ACSP' keywords in description, handling spaces"""
@@ -3567,7 +3646,9 @@ class IntegratedBankProcessor:
 
                 # Build the complete description in new format
                 # Convert pos_code to integer string to remove decimal if present
-                clean_pos_code = str(int(float(pos_code))) if pos_code else pos_code
+                clean_pos_code = (
+                    str(int(float(pos_code))) if pos_code else pos_code
+                )
                 if description_dept_code:
                     description = f"{base_description} (POS {clean_pos_code} - {description_dept_code})"
                 else:
@@ -3728,6 +3809,108 @@ class IntegratedBankProcessor:
                     self.logger.warning(
                         f"GIAI NGAN TKV pattern detected but couldn't extract account number: {description}"
                     )
+
+            # NEW BUSINESS LOGIC: Special handling for "PHI QUAN LY TAI KHOAN" pattern
+            elif "PHI QUAN LY TAI KHOAN" in transaction.description.upper():
+                # Set description
+                description = "Phí quản lý tài khoản"
+
+                # Set counterparty to the bank of this file
+                bank_code = (
+                    self.current_bank_info.get("code", "")
+                    if self.current_bank_info
+                    else ""
+                )
+                bank_name = (
+                    self.current_bank_info.get("name", "")
+                    if self.current_bank_info
+                    else ""
+                )
+                bank_address = (
+                    self.current_bank_info.get("address", "")
+                    if self.current_bank_info
+                    else ""
+                )
+
+                # Set counterparty info to bank information
+                counterparty_code = bank_code
+                counterparty_name = bank_name
+                address = bank_address
+
+                # Set debit account to 3311 as requested for all banks
+                if rule.document_type == "BC":  # Receipt
+                    debit_account = self.default_bank_account
+                    credit_account = "6427"  # Account management fee account
+                else:  # Payment
+                    debit_account = "3311"  # Expense account as requested
+                    credit_account = self.default_bank_account
+
+                self.logger.info(
+                    f"Applied PHI QUAN LY TAI KHOAN formatting: {description} with bank counterparty and debit account 3311"
+                )
+
+            # NEW BUSINESS LOGIC: Special handling for "PHI BSMS" pattern
+            elif "PHI BSMS" in transaction.description.upper():
+                # Set description
+                description = "Phí BSMS"
+
+                # Set counterparty to the bank of this file
+                bank_code = (
+                    self.current_bank_info.get("code", "")
+                    if self.current_bank_info
+                    else ""
+                )
+                bank_name = (
+                    self.current_bank_info.get("name", "")
+                    if self.current_bank_info
+                    else ""
+                )
+                bank_address = (
+                    self.current_bank_info.get("address", "")
+                    if self.current_bank_info
+                    else ""
+                )
+
+                # Set counterparty info to bank information
+                counterparty_code = bank_code
+                counterparty_name = bank_name
+                address = bank_address
+
+                # For BIDV files, set debit account to 3311
+                # For other banks (like MBB), use the default 6427
+                if self.current_bank_name and "BIDV" in self.current_bank_name.upper():
+                    # BIDV specific handling - debit account should be 3311
+                    if rule.document_type == "BC":  # Receipt
+                        debit_account = self.default_bank_account
+                        credit_account = "6427"
+                    else:  # Payment
+                        debit_account = "3311"  # BIDV specific - requested 3311
+                        credit_account = self.default_bank_account
+                else:
+                    # Default handling for other banks (like MBB)
+                    if rule.document_type == "BC":  # Receipt
+                        debit_account = self.default_bank_account
+                        credit_account = "6427"
+                    else:  # Payment
+                        debit_account = "6427"  # MBB and others use 6427
+                        credit_account = self.default_bank_account
+
+                self.logger.info(
+                    f"Applied PHI BSMS formatting: {description} with bank counterparty (BIDV: 3311, Others: 6427)"
+                )
+
+            # NEW BUSINESS LOGIC: Special handling for "thanh toan tien hang" pattern
+            elif (
+                "thanh toan tien hang" in transaction.description.lower()
+                or "tt tien hang" in transaction.description.lower()
+            ):
+                # Format the description with proper Vietnamese diacritics while preserving variable parts
+                description = self._format_thanh_toan_tien_hang_description(
+                    transaction.description
+                )
+                self.logger.info(
+                    f"Applied 'thanh toan tien hang' formatting: {description}"
+                )
 
             else:
                 # For all other cases, use the raw/original description

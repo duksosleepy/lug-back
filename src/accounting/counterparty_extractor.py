@@ -69,13 +69,14 @@ class CounterpartyExtractor:
         self.department_code_replacements = {
             "BRVT": "BARIA",
             "CTHO": "CANTHO",
-            "PSHV2F18": "PSHV",
+            "PSHV 2F18": "PSHV",
             "08NTRAI": "LUG08NTRAI",
             "LDH": "LUGLDH",
             "TIMESCT": "TIMESCT_EV",
             "GO HLONG": "GOHALONG",
             "LUGTIMESCITY": "TIMESCT_EV",
             "HOLDALLVC3/2": "HOLDALLVC32",
+            "VINCOM 304": "VINCOM 304 L2-12",
             # Add more mappings here in the future as needed
             # "SHORT": "FULL_NAME",
         }
