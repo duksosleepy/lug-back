@@ -185,7 +185,7 @@ def fetch_data(token: str, is_online: bool, limit: int = 50) -> List[Dict]:
 
     # Calculate date range
     today = datetime.now()
-    yesterday = today - timedelta(days=2)
+    yesterday = today - timedelta(days=1)
 
     # Format dates for API query: current day at 5:00 AM and previous day at 5:00 AM
     date_lte = today.strftime("%Y-%m-%dT05:00:00")
