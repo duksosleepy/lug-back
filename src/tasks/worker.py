@@ -38,12 +38,12 @@ celery_app.conf.update(
         },
         "daily-sapo-sync": {
             "task": "src.tasks.worker.daily_sapo_sync",
-            "schedule": crontab(hour=0, minute=30),
+            "schedule": crontab(hour=9, minute=5),
             "args": (),
         },
         "crm-data-sync": {
             "task": "src.crm.tasks.sync_crm_data",
-            "schedule": crontab(hour=9, minute=0),  # Run at 5:00 AM daily
+            "schedule": crontab(hour=9, minute=5),  # Run at 5:00 AM daily
             "args": (),
         },
     },
