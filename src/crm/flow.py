@@ -183,14 +183,15 @@ def fetch_data(token: str, is_online: bool, limit: int = 50) -> List[Dict]:
     url = ONLINE_DATA_URL if is_online else OFFLINE_DATA_URL
     source_type = "online" if is_online else "offline"
 
-    # Calculate date range: from 12:00 AM previous day to 12:00 AM current day
+    # Calculate date range: from 12:00 AM 5 days ago to 12:00 AM 4 days ago
     task_runtime = datetime.now()
     current_day_midnight = task_runtime.replace(hour=0, minute=0, second=0, microsecond=0)
-    previous_day_midnight = current_day_midnight - timedelta(days=1)
+    target_day_start = current_day_midnight - timedelta(days=5)
+    target_day_end = current_day_midnight - timedelta(days=4)
 
-    # Format dates for API query: >= previous day 00:00:00, < current day 00:00:00
-    date_lte = current_day_midnight.strftime("%Y-%m-%dT%H:%M:%S")
-    date_gte = previous_day_midnight.strftime("%Y-%m-%dT%H:%M:%S")
+    # Format dates for API query: >= 5 days ago 00:00:00, < 4 days ago 00:00:00
+    date_gte = target_day_start.strftime("%Y-%m-%dT00:00:00")
+    date_lte = target_day_end.strftime("%Y-%m-%dT00:00:00")
 
     # Construct date filter
     date_filter = {
