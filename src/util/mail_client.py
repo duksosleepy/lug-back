@@ -110,12 +110,14 @@ class EmailClient:
         """
         try:
             # Use custom attachment name if provided, otherwise use file basename
-            filename = attachment_name if attachment_name else os.path.basename(file_path)
-            
+            filename = (
+                attachment_name
+                if attachment_name
+                else os.path.basename(file_path)
+            )
+
             with open(file_path, "rb") as file:
-                attachment = MIMEApplication(
-                    file.read(), Name=filename
-                )
+                attachment = MIMEApplication(file.read(), Name=filename)
 
             attachment["Content-Disposition"] = (
                 f'attachment; filename="{filename}"'
@@ -134,7 +136,7 @@ class EmailClient:
 
         Args:
             msg (MIMEMultipart): Đối tượng email
-            file_attachments (list): Danh sách đường dẫn đến các file cần đính kèm hoặc 
+            file_attachments (list): Danh sách đường dẫn đến các file cần đính kèm hoặc
                                    dict với 'path' và 'name' keys
 
         Returns:
@@ -143,8 +145,8 @@ class EmailClient:
         for attachment in file_attachments:
             if isinstance(attachment, dict):
                 # Handle dict format with path and name
-                file_path = attachment.get('path')
-                attachment_name = attachment.get('name')
+                file_path = attachment.get("path")
+                attachment_name = attachment.get("name")
                 if file_path and os.path.exists(file_path):
                     msg = self.attach_file(msg, file_path, attachment_name)
             else:
