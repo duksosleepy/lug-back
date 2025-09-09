@@ -77,6 +77,13 @@ class CounterpartyExtractor:
             "LUGTIMESCITY": "TIMESCT_EV",
             "HOLDALLVC3/2": "HOLDALLVC32",
             "VINCOM304": "VINCOM 304 L2-12",
+            "LUGCRM": "CRM",
+            "LEDUAN": "LUGLEDUAN",
+            "PDL": "LUGPDL",
+            "VHM": "LUGVHM",
+            "LUGCH 604A": "LUGCH",
+            "VCBH2": "VINCOMBH2",
+            "VINCOMROYAL": "VINCOMROYAL2",
             # Add more mappings here in the future as needed
         }
 
@@ -1166,14 +1173,19 @@ class CounterpartyExtractor:
         return final_code
 
     def handle_pos_machine_counterparty_logic(
-        self, extracted_pos_machines: List[Dict], current_address: str = None
+        self,
+        extracted_pos_machines: List[Dict],
+        current_address: str = None,
+        document_type: str = None,
     ) -> Dict[str, any]:
         """
         Implement POS machine counterparty logic without address filtering.
+        Enhanced with BC statement KL validation.
 
         Args:
             extracted_pos_machines: List of POS machines from search_entities
             current_address: Current transaction/context address (no longer used for filtering)
+            document_type: Document type ("BC" for credit/receipts, "BN" for debit/payments)
 
         Returns:
             Dictionary with counterparty info found via POS machine logic
@@ -1271,7 +1283,41 @@ class CounterpartyExtractor:
             best_counterparty = counterparty_matches[0]
             condition_applied = "pos_machine_logic"
 
-        # Step 6: Return the best counterparty match
+        # Step 6: Apply BC statement KL validation
+        if document_type == "BC":
+            self.logger.info(
+                "BC statement detected - applying KL counterparty validation"
+            )
+
+            # Filter counterparties to only those with 'KL' in the code
+            kl_counterparties = [
+                cp
+                for cp in counterparty_matches
+                if "KL" in str(cp.get("code", ""))
+            ]
+
+            if kl_counterparties:
+                # Use the first KL counterparty (highest score)
+                best_counterparty = kl_counterparties[0]
+                self.logger.info(
+                    f"BC validation: Found {len(kl_counterparties)} KL counterparties, using: {best_counterparty['code']}"
+                )
+                condition_applied = f"{condition_applied}_bc_kl_validated"
+            else:
+                # If no KL counterparties found, create a default KL counterparty
+                self.logger.warning(
+                    f"BC validation: No KL counterparties found, creating default KL-{search_code}"
+                )
+                best_counterparty = {
+                    "code": f"KL-{search_code}",
+                    "name": f"Khách lẻ {search_code}",
+                    "address": "",
+                    "phone": "",
+                    "tax_id": "",
+                }
+                condition_applied = f"{condition_applied}_bc_default_kl"
+
+        # Step 7: Return the best counterparty match
         result = {
             "code": best_counterparty["code"],
             "name": self.clean_counterparty_name(best_counterparty["name"]),
@@ -1284,15 +1330,19 @@ class CounterpartyExtractor:
             "pos_department_code": pos_department_code,
             "cleaned_department_code": cleaned_dept_code,
             "search_code": search_code,
-            "bonus_condition_applied": len(filtered_matches) > 0,
+            "bonus_condition_applied": len(filtered_matches) > 0
+            if "filtered_matches" in locals()
+            else False,
             "bonus_condition_name": bonus_condition_name,
+            "bc_kl_validation_applied": document_type == "BC",
         }
 
         self.logger.info(
             f"POS machine logic result: Found counterparty '{result['name']}' (code: {result['code']}) "
             f"for POS {pos_code} with cleaned department code '{cleaned_dept_code}' "
             f"and search code '{search_code}' "
-            f"(bonus condition applied: {result['bonus_condition_applied']})"
+            f"(bonus condition applied: {result.get('bonus_condition_applied', False)}) "
+            f"(BC KL validation: {result.get('bc_kl_validation_applied', False)})"
         )
 
         return result
@@ -1563,7 +1613,8 @@ class CounterpartyExtractor:
         if extracted_pos_machines:
             self.logger.info("Applying POS machine counterparty logic")
             pos_result = self.handle_pos_machine_counterparty_logic(
-                extracted_pos_machines
+                extracted_pos_machines,
+                document_type=None,  # Backward compatibility - no document type in this context
             )
             if pos_result:
                 return pos_result

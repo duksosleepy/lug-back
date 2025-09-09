@@ -2083,19 +2083,24 @@ class IntegratedBankProcessor:
         # For non-transfer transactions, find accounts by codes
         # Filter codes to only use account numbers (10+ digits) for account determination
         # This prevents extracting partial numbers from account names like "3208" from "7432085703944"
-        account_number_codes = [(code, code_type, position) for code, code_type, position in codes 
-                               if code_type == "account_number"]  # 10+ digit numbers
-        
+        account_number_codes = [
+            (code, code_type, position)
+            for code, code_type, position in codes
+            if code_type == "account_number"
+        ]  # 10+ digit numbers
+
         matched_accounts = []
         codes_to_check = account_number_codes if account_number_codes else codes
-        
+
         for code, code_type, position in codes_to_check:
             # For POS transactions, be extra careful about which codes we use
             # Skip medium codes (6-9 digits) that might be part of longer account numbers
             if "POS" in description.upper() and code_type == "medium_code":
-                self.logger.debug(f"Skipping medium code {code} for POS transaction to avoid false matches")
+                self.logger.debug(
+                    f"Skipping medium code {code} for POS transaction to avoid false matches"
+                )
                 continue
-                
+
             account_match = self.find_account_by_code(code)
             if account_match:
                 account_match.position = position
@@ -2367,7 +2372,7 @@ class IntegratedBankProcessor:
         if pos_code:
             try:
                 from src.accounting.fast_search import search_pos_machines
-                
+
                 pos_results = search_pos_machines(
                     pos_code, field_name="code", limit=1
                 )
@@ -2391,7 +2396,9 @@ class IntegratedBankProcessor:
                         )
                         return debit_account, credit_account
             except Exception as e:
-                self.logger.warning(f"Error in POS-specific account determination: {e}")
+                self.logger.warning(
+                    f"Error in POS-specific account determination: {e}"
+                )
 
         # PRIORITY 3: Try to determine accounts by extracting numeric codes
         # But be more selective for POS transactions to avoid false matches
@@ -2614,15 +2621,56 @@ class IntegratedBankProcessor:
         code = mid_record.get("code", "")
         tid = mid_record.get("tid", "")
 
-        # 5. Process code (get part after "_")
-        if "-" in code:
-            processed_code = code.split("-")[1]
-        elif "_" in code:
-            processed_code = code.split("_")[1]
+        # 5. Process code with enhanced cleaning and replacement logic (same as VISA/MASTER)
+        if not code:
+            self.logger.error("Empty code value received")
+            processed_code = "KL"  # Default to KL if code is empty
         else:
-            processed_code = code
-            self.logger.warning(
-                f"Unexpected code format (missing delimiter): {code}"
+            # Step 1: Split by delimiter and get the last element
+            if "-" in code:
+                parts = code.split("-")
+                last_element = parts[-1].strip() if parts else code
+                self.logger.info(
+                    f"Split by '-': {code} -> last element: {last_element}"
+                )
+            elif "_" in code:
+                parts = code.split("_")
+                last_element = parts[-1].strip() if parts else code
+                self.logger.info(
+                    f"Split by '_': {code} -> last element: {last_element}"
+                )
+            elif "*" in code:
+                parts = code.split("*")
+                last_element = parts[-1].strip() if parts else code
+                self.logger.info(
+                    f"Split by '*': {code} -> last element: {last_element}"
+                )
+            else:
+                last_element = code.strip()
+                self.logger.warning(
+                    f"No delimiter found, using full code: {code}"
+                )
+
+            # Step 2: Remove spaces
+            no_spaces = re.sub(r"\s+", "", last_element)
+
+            # Step 3: Apply department_code_replacements (use existing dictionary from counterparty_extractor)
+            # Use the same dictionary that BIDV processing uses
+            processed_code = no_spaces
+            for (
+                old_text,
+                new_text,
+            ) in (
+                self.counterparty_extractor.department_code_replacements.items()
+            ):
+                if old_text in processed_code:
+                    processed_code = processed_code.replace(old_text, new_text)
+                    self.logger.info(
+                        f"Applied VISA/MASTER replacement: '{old_text}' -> '{new_text}'"
+                    )
+
+            self.logger.info(
+                f"Final processed code: '{code}' -> '{processed_code}'"
             )
 
         # 6. Create main transaction record
@@ -3270,10 +3318,11 @@ class IntegratedBankProcessor:
                                 f"Using bank address as current_address: {current_address}"
                             )
 
-                        # Call the enhanced POS machine logic with address parameter
+                        # Call the enhanced POS machine logic with address parameter and document type for BC validation
                         counterparty_info = self.counterparty_extractor.handle_pos_machine_counterparty_logic(
                             extracted_pos_machines,
                             current_address=current_address,
+                            document_type=rule.document_type,
                         )
 
                         # If POS machine logic failed, fall back to default
@@ -4296,21 +4345,75 @@ class IntegratedBankProcessor:
                                             f"Found MID record: code={code}, tid={tid}"
                                         )
 
-                                        # Process code (get part after "_" or "-")
-                                        processed_code = ""
-                                        if "-" in code:
-                                            processed_code = code.split("-")[1]
-                                        elif "_" in code:
-                                            processed_code = code.split("_")[1]
+                                        # Process code with enhanced cleaning and replacement logic (same as VISA/MASTER)
+                                        if not code:
+                                            logger.error(
+                                                f"Empty code value received for MID: {mid}"
+                                            )
+                                            processed_code = "KL"  # Default to KL if code is empty
                                         else:
-                                            processed_code = code
-                                            logger.warning(
-                                                f"Unexpected code format (missing delimiter): {code}"
+                                            # Step 1: Split by delimiter and get the last element
+                                            if "-" in code:
+                                                parts = code.split("-")
+                                                last_element = (
+                                                    parts[-1].strip()
+                                                    if parts
+                                                    else code
+                                                )
+                                                logger.info(
+                                                    f"Split by '-': {code} -> last element: {last_element}"
+                                                )
+                                            elif "_" in code:
+                                                parts = code.split("_")
+                                                last_element = (
+                                                    parts[-1].strip()
+                                                    if parts
+                                                    else code
+                                                )
+                                                logger.info(
+                                                    f"Split by '_': {code} -> last element: {last_element}"
+                                                )
+                                            elif "*" in code:
+                                                parts = code.split("*")
+                                                last_element = (
+                                                    parts[-1].strip()
+                                                    if parts
+                                                    else code
+                                                )
+                                                logger.info(
+                                                    f"Split by '*': {code} -> last element: {last_element}"
+                                                )
+                                            else:
+                                                last_element = code.strip()
+                                                logger.warning(
+                                                    f"No delimiter found, using full code: {code}"
+                                                )
+
+                                            # Step 2: Remove spaces
+                                            no_spaces = re.sub(
+                                                r"\s+", "", last_element
                                             )
 
-                                        logger.info(
-                                            f"Processed code: {processed_code}"
-                                        )
+                                            # Step 3: Apply department_code_replacements (use existing dictionary from counterparty_extractor)
+                                            # Use the same dictionary that BIDV processing uses
+                                            processed_code = no_spaces
+                                            for (
+                                                old_text,
+                                                new_text,
+                                            ) in self.counterparty_extractor.department_code_replacements.items():
+                                                if old_text in processed_code:
+                                                    processed_code = (
+                                                        processed_code.replace(
+                                                            old_text, new_text
+                                                        )
+                                                    )
+                                                    logger.info(
+                                                        f"Applied VISA/MASTER replacement: '{old_text}' -> '{new_text}'"
+                                                    )
+
+                                            logger.info(
+                                                f"Final processed code: '{code}' -> '{processed_code}'"
+                                            )
 
                                         # Search for counterparty using processed code
                                         from src.accounting.fast_search import (

@@ -137,28 +137,45 @@ def process_vcb_pos_transaction(
         if code:
             logger.info(f"Found code in department_code field: {code}")
 
-    # 5. Process code (get part after "*", "_" or "-")
+    # 5. Process code with cleaning and replacement logic (like BIDV processing)
     if not code:
         logger.error(f"Empty code value received for MID: {mid}")
         processed_code = "KL"  # Default to KL if code is empty
-    elif "-" in code:
-        processed_code = code.split("-")[1]
-        logger.info(
-            f"Processed code with '-' delimiter: {code} -> {processed_code}"
-        )
-    elif "_" in code:
-        processed_code = code.split("_")[1]
-        logger.info(
-            f"Processed code with '_' delimiter: {code} -> {processed_code}"
-        )
-    elif "*" in code:
-        processed_code = code.split("*")[1]
-        logger.info(
-            f"Processed code with '*' delimiter: {code} -> {processed_code}"
-        )
     else:
-        processed_code = code
-        logger.warning(f"Unexpected code format (missing delimiter): {code}")
+        # Step 5a: Split by delimiter and get the last element
+        if "-" in code:
+            parts = code.split("-")
+            last_element = parts[-1].strip() if parts else code
+            logger.info(f"Split by '-': {code} -> last element: {last_element}")
+        elif "_" in code:
+            parts = code.split("_")
+            last_element = parts[-1].strip() if parts else code
+            logger.info(f"Split by '_': {code} -> last element: {last_element}")
+        elif "*" in code:
+            parts = code.split("*")
+            last_element = parts[-1].strip() if parts else code
+            logger.info(f"Split by '*': {code} -> last element: {last_element}")
+        else:
+            last_element = code.strip()
+            logger.warning(f"No delimiter found, using full code: {code}")
+        
+        # Step 5b: Remove spaces
+        no_spaces = re.sub(r"\s+", "", last_element)
+        
+        # Step 5c: Apply department_code_replacements (use existing dictionary from counterparty_extractor)
+        from src.accounting.counterparty_extractor import CounterpartyExtractor
+        
+        # Create a temporary extractor instance to access the shared department_code_replacements
+        temp_extractor = CounterpartyExtractor()
+        department_code_replacements = temp_extractor.department_code_replacements
+        
+        processed_code = no_spaces
+        for old_text, new_text in department_code_replacements.items():
+            if old_text in processed_code:
+                processed_code = processed_code.replace(old_text, new_text)
+                logger.info(f"Applied VISA/MASTER replacement: '{old_text}' -> '{new_text}'")
+        
+        logger.info(f"Final processed code: '{code}' -> '{processed_code}'")
 
     # 6. Create the main record with custom description
     main_record = transaction_data.copy()
