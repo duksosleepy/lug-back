@@ -183,17 +183,18 @@ def fetch_data(token: str, is_online: bool, limit: int = 50) -> List[Dict]:
     url = ONLINE_DATA_URL if is_online else OFFLINE_DATA_URL
     source_type = "online" if is_online else "offline"
 
-    # Calculate date range: from task runtime to same time previous day
+    # Calculate date range: from 12:00 AM previous day to 12:00 AM current day
     task_runtime = datetime.now()
-    previous_day_same_time = task_runtime - timedelta(days=1)
+    current_day_midnight = task_runtime.replace(hour=0, minute=0, second=0, microsecond=0)
+    previous_day_midnight = current_day_midnight - timedelta(days=1)
 
-    # Format dates for API query: use actual task runtime
-    date_lte = task_runtime.strftime("%Y-%m-%dT%H:%M:%S")
-    date_gt = previous_day_same_time.strftime("%Y-%m-%dT%H:%M:%S")
+    # Format dates for API query: >= previous day 00:00:00, < current day 00:00:00
+    date_lte = current_day_midnight.strftime("%Y-%m-%dT%H:%M:%S")
+    date_gte = previous_day_midnight.strftime("%Y-%m-%dT%H:%M:%S")
 
     # Construct date filter
     date_filter = {
-        "_and": [{"Ngay_Ct": {"_gt": date_gt}}, {"Ngay_Ct": {"_lte": date_lte}}]
+        "_and": [{"Ngay_Ct": {"_gte": date_gte}}, {"Ngay_Ct": {"_lt": date_lte}}]
     }
 
     # Parameters for the API request
@@ -203,7 +204,7 @@ def fetch_data(token: str, is_online: bool, limit: int = 50) -> List[Dict]:
         "filter": json.dumps(date_filter),
     }
 
-    logger.info(f"Fetching {source_type} data from {date_gt} to {date_lte}")
+    logger.info(f"Fetching {source_type} data from {date_gte} to {date_lte}")
     logger.info(f"Task runtime: {task_runtime}")
 
     try:
