@@ -58,7 +58,14 @@ FILTER_RULES = {
                 "name": "product_code_exclusion",
                 "column": "Mã vật tư",
                 "type": "exclude_containing",
-                "values": ["PBHDT", "THUNG", "DVVC_ONL", "TUINILONPK"],
+                "values": [
+                    "PBHDT",
+                    "THUNG",
+                    "DVVC_ONL",
+                    "TUINILONPK",
+                    "THECAO",
+                    "TUI GIAY LON",
+                ],
             },
             {
                 "name": "product_name_exclusion",
@@ -122,6 +129,8 @@ FILTER_RULES = {
                     "DVVC_ONL",
                     "PBHDT",
                     "TUINILONPK",
+                    "THECAO",
+                    "TUI GIAY LON",
                 ],
             },
             {
@@ -185,7 +194,9 @@ def fetch_data(token: str, is_online: bool, limit: int = 50) -> List[Dict]:
 
     # Calculate date range: from 12:00 AM 5 days ago to 12:00 AM 4 days ago
     task_runtime = datetime.now()
-    current_day_midnight = task_runtime.replace(hour=0, minute=0, second=0, microsecond=0)
+    current_day_midnight = task_runtime.replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
     target_day_start = current_day_midnight - timedelta(days=5)
     target_day_end = current_day_midnight - timedelta(days=4)
 
@@ -195,7 +206,10 @@ def fetch_data(token: str, is_online: bool, limit: int = 50) -> List[Dict]:
 
     # Construct date filter
     date_filter = {
-        "_and": [{"Ngay_Ct": {"_gte": date_gte}}, {"Ngay_Ct": {"_lt": date_lte}}]
+        "_and": [
+            {"Ngay_Ct": {"_gte": date_gte}},
+            {"Ngay_Ct": {"_lt": date_lte}},
+        ]
     }
 
     # Parameters for the API request
@@ -342,7 +356,9 @@ def transform_data(sales_data: List[Dict]) -> List[Dict]:
                     "tenHang": item.get("Ten_Hang"),
                     "imei": item.get("Imei"),
                     "soLuong": item.get("So_Luong"),
-                    "doanhThu": item.get("Doanh_Thu") if item.get("Doanh_Thu") is not None else 0,
+                    "doanhThu": item.get("Doanh_Thu")
+                    if item.get("Doanh_Thu") is not None
+                    else 0,
                 }
             ],
         }
