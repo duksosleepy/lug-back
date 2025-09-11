@@ -356,10 +356,7 @@ def transform_data(sales_data: List[Dict]) -> List[Dict]:
                     "tenHang": item.get("Ten_Hang"),
                     "imei": item.get("Imei"),
                     "soLuong": item.get("So_Luong"),
-                    "doanhThu": item.get("Doanh_Thu")
-                    if item.get("Doanh_Thu") is not None
-                    and item.get("Doanh_Thu") != 0
-                    else 0,
+                    "doanhThu": item.get("Doanh_Thu") or 0,
                 }
             ],
         }
