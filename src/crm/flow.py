@@ -342,7 +342,7 @@ def transform_data(sales_data: List[Dict]) -> List[Dict]:
                 "maCT": item.get("Ma_Ct"),
                 "soCT": item.get("So_Ct"),
                 "maBoPhan": item.get("Ma_BP"),
-                "maDonHang": item.get("Ma_Don_Hang"),
+                "maDonHang": item.get("Ma_Hang_Old"),
                 "tenKhachHang": item.get("Ten_Khach_Hang"),
                 "soDienThoai": item.get("So_Dien_Thoai"),
                 "tinhThanh": item.get("Tinh_Thanh"),
@@ -358,6 +358,7 @@ def transform_data(sales_data: List[Dict]) -> List[Dict]:
                     "soLuong": item.get("So_Luong"),
                     "doanhThu": item.get("Doanh_Thu")
                     if item.get("Doanh_Thu") is not None
+                    and item.get("Doanh_Thu") != 0
                     else 0,
                 }
             ],
@@ -544,7 +545,7 @@ def create_excel_file(data: List[Dict], filename: str) -> str:
                 "Mã Ct": "Ma_Ct",
                 "Số Ct": "So_Ct",
                 "Mã bộ phận": "Ma_BP",
-                "Mã đơn hàng": "Ma_Don_Hang",
+                "Mã đơn hàng": "Ma_Hang_Old",
                 "Tên khách hàng": "Ten_Khach_Hang",
                 "Số điện thoại": "So_Dien_Thoai",
                 "Tỉnh thành": "Tinh_Thanh",
