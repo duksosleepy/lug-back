@@ -45,6 +45,12 @@ class AppSettings(BaseSettings):
             "API_ENDPOINT", "http://10.100.0.1:8081/api/v2"
         )
 
+        # Product mapping file path
+        self.product_mapping_file = self.get_env(
+            "PRODUCT_MAPPING_FILE", 
+            "src/crm/warranty_rule.xlsx"
+        )
+
     def _parse_cors_origins(self) -> List[str]:
         """
         Phân tích danh sách origins cho CORS từ biến môi trường.

@@ -1,12 +1,15 @@
+import io
 import json
 import re
 from datetime import datetime, timedelta
+from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Dict, List
 
 import httpx
 import pandas as pd
 
+from src.processors.product_mapping_processor import ProductMappingProcessor
 from src.settings import app_settings
 from src.util.logging import get_logger
 from src.util.send_email import send_notification_email
@@ -458,6 +461,10 @@ def process_data():
             f"Total filtered records: {len(all_filtered_data)} (Online: {len(filtered_online_data)}, Offline: {len(filtered_offline_data)})"
         )
 
+        # Step 5.1: Apply product mapping to records with Ma_Hang field
+        logger.info("Applying product mapping to all filtered data...")
+        all_filtered_data = apply_product_mapping(all_filtered_data)
+
         # Log sample data if available for debugging
         if online_data:
             logger.info(
@@ -608,6 +615,114 @@ def filter_negative_records(data: List[Dict]) -> List[Dict]:
             negative_records.append(item)
 
     return negative_records
+
+
+def apply_product_mapping(data: List[Dict]) -> List[Dict]:
+    """Apply product mapping to records with Ma_Hang field using ProductMappingProcessor.
+
+    Args:
+        data: List of dictionaries containing the data with Ma_Hang field
+
+    Returns:
+        List of dictionaries with updated Ma_Hang values after mapping
+    """
+    if not data:
+        logger.info("No data to apply product mapping")
+        return data
+
+    # Check if mapping file exists
+    mapping_file_path = Path(app_settings.product_mapping_file)
+    if not mapping_file_path.exists():
+        logger.warning(
+            f"Product mapping file not found at {mapping_file_path}. Skipping product mapping."
+        )
+        return data
+
+    try:
+        # Filter records that have Ma_Hang field
+        records_with_ma_hang = [item for item in data if item.get("Ma_Hang")]
+
+        if not records_with_ma_hang:
+            logger.info(
+                "No records with Ma_Hang field found for product mapping"
+            )
+            return data
+
+        logger.info(
+            f"Applying product mapping to {len(records_with_ma_hang)} records with Ma_Hang field"
+        )
+
+        # Convert data to DataFrame for processing
+        df = pd.DataFrame(records_with_ma_hang)
+
+        # Rename columns to match ProductMappingProcessor expectations
+        if "Ma_Hang" in df.columns:
+            df["Mã hàng"] = df["Ma_Hang"]
+        if "Ten_Hang" in df.columns:
+            df["Tên hàng"] = df["Ten_Hang"]
+
+        # Create temporary file for data
+        with NamedTemporaryFile(suffix=".xlsx", delete=False) as temp_data_file:
+            df.to_excel(temp_data_file.name, index=False)
+            temp_data_path = temp_data_file.name
+
+        try:
+            # Create output buffer
+            output_buffer = io.BytesIO()
+
+            # Initialize ProductMappingProcessor
+            processor = ProductMappingProcessor(
+                data_file=temp_data_path, mapping_file=str(mapping_file_path)
+            )
+
+            # Process the mapping
+            mapping_result = processor.process_to_buffer(output_buffer)
+
+            # Read the processed data back
+            output_buffer.seek(0)
+            processed_df = pd.read_excel(output_buffer, engine="openpyxl")
+
+            # Convert back to list of dictionaries
+            processed_records = processed_df.to_dict("records")
+
+            # Update original data with mapped values
+            updated_data = []
+            processed_index = 0
+
+            for item in data:
+                if item.get("Ma_Hang"):
+                    if processed_index < len(processed_records):
+                        processed_item = processed_records[processed_index]
+                        # Update Ma_Hang and Ten_Hang if they were mapped
+                        if "Mã hàng" in processed_item:
+                            item["Ma_Hang"] = processed_item["Mã hàng"]
+                        if "Tên hàng" in processed_item and "Ten_Hang" in item:
+                            item["Ten_Hang"] = processed_item["Tên hàng"]
+                        processed_index += 1
+
+                updated_data.append(item)
+
+            logger.info(
+                f"Product mapping completed. Mapped {mapping_result.get('matched_count', 0)} out of {mapping_result.get('total_count', 0)} records"
+            )
+
+            return updated_data
+
+        finally:
+            # Clean up temporary file
+            import os
+
+            try:
+                os.unlink(temp_data_path)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to clean up temporary file {temp_data_path}: {e}"
+                )
+
+    except Exception as e:
+        logger.error(f"Error applying product mapping: {e}", exc_info=True)
+        logger.warning("Continuing without product mapping due to error")
+        return data
 
 
 def send_completion_email(
