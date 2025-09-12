@@ -37,7 +37,7 @@ AUTH_CREDENTIALS = {
 # Field mapping from filter rules to API response
 FIELD_MAPPING = {
     "Tên khách hàng": "Ten_Khach_Hang",
-    "Mã vật tư": "Ma_Hang",
+    "Mã vật tư": "Ma_Hang_Old",
     "Tên vật tư": "Ten_Hang",
     "Số điện thoại": "So_Dien_Thoai",
     "Mã Ctừ": "Ma_Ct",
@@ -345,7 +345,7 @@ def transform_data(sales_data: List[Dict]) -> List[Dict]:
                 "maCT": item.get("Ma_Ct"),
                 "soCT": item.get("So_Ct"),
                 "maBoPhan": item.get("Ma_BP"),
-                "maDonHang": item.get("Ma_Hang_Old"),
+                "maDonHang": item.get("Ma_Don_Hang"),
                 "tenKhachHang": item.get("Ten_Khach_Hang"),
                 "soDienThoai": item.get("So_Dien_Thoai"),
                 "tinhThanh": item.get("Tinh_Thanh"),
@@ -355,7 +355,7 @@ def transform_data(sales_data: List[Dict]) -> List[Dict]:
             },
             "detail": [
                 {
-                    "maHang": item.get("Ma_Hang"),
+                    "maHang": item.get("Ma_Hang_Old"),
                     "tenHang": item.get("Ten_Hang"),
                     "imei": item.get("Imei"),
                     "soLuong": item.get("So_Luong"),
@@ -549,14 +549,14 @@ def create_excel_file(data: List[Dict], filename: str) -> str:
                 "Mã Ct": "Ma_Ct",
                 "Số Ct": "So_Ct",
                 "Mã bộ phận": "Ma_BP",
-                "Mã đơn hàng": "Ma_Hang_Old",
+                "Mã đơn hàng": "Ma_Don_Hang",
                 "Tên khách hàng": "Ten_Khach_Hang",
                 "Số điện thoại": "So_Dien_Thoai",
                 "Tỉnh thành": "Tinh_Thanh",
                 "Quận huyện": "Quan_Huyen",
                 "Phường xã": "Phuong_Xa",
                 "Địa chỉ": "Dia_Chi",
-                "Mã hàng": "Ma_Hang",
+                "Mã hàng": "Ma_Hang_Old",
                 "Tên hàng": "Ten_Hang",
                 "Imei": "Imei",
                 "Số lượng": "So_Luong",
@@ -640,7 +640,9 @@ def apply_product_mapping(data: List[Dict]) -> List[Dict]:
 
     try:
         # Filter records that have Ma_Hang field
-        records_with_ma_hang = [item for item in data if item.get("Ma_Hang")]
+        records_with_ma_hang = [
+            item for item in data if item.get("Ma_Hang_Old")
+        ]
 
         if not records_with_ma_hang:
             logger.info(
@@ -656,8 +658,8 @@ def apply_product_mapping(data: List[Dict]) -> List[Dict]:
         df = pd.DataFrame(records_with_ma_hang)
 
         # Rename columns to match ProductMappingProcessor expectations
-        if "Ma_Hang" in df.columns:
-            df["Mã hàng"] = df["Ma_Hang"]
+        if "Ma_Hang_Old" in df.columns:
+            df["Mã hàng"] = df["Ma_Hang_Old"]
         if "Ten_Hang" in df.columns:
             df["Tên hàng"] = df["Ten_Hang"]
 
@@ -690,12 +692,12 @@ def apply_product_mapping(data: List[Dict]) -> List[Dict]:
             processed_index = 0
 
             for item in data:
-                if item.get("Ma_Hang"):
+                if item.get("Ma_Hang_Old"):
                     if processed_index < len(processed_records):
                         processed_item = processed_records[processed_index]
                         # Update Ma_Hang and Ten_Hang if they were mapped
                         if "Mã hàng" in processed_item:
-                            item["Ma_Hang"] = processed_item["Mã hàng"]
+                            item["Ma_Hang_Old"] = processed_item["Mã hàng"]
                         if "Tên hàng" in processed_item and "Ten_Hang" in item:
                             item["Ten_Hang"] = processed_item["Tên hàng"]
                         processed_index += 1
