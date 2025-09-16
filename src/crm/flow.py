@@ -760,10 +760,17 @@ def send_completion_email(
 
         # Send email with all attachments using shorter names
         subject = f"CRM Data Processing Completed - {date_str}"
+        # Calculate the actual data retrieval date range (same logic as in fetch_data)
+        current_day_midnight = task_runtime.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        target_day_start = current_day_midnight - timedelta(days=3)
+        target_day_end = current_day_midnight - timedelta(days=1)
+
         body = f"""
         Xử lý dữ liệu CRM thành công.
 
-        Khoảng thời gian: {previous_day_same_time.strftime("%Y-%m-%d %H:%M")} đến {task_runtime.strftime("%Y-%m-%d %H:%M")}
+        Khoảng thời gian: {target_day_start.strftime("%Y-%m-%d")} đến {target_day_end.strftime("%Y-%m-%d")}
 
         Tóm tắt:
         - Dữ liệu online: {len(filtered_online_data)} bản ghi
