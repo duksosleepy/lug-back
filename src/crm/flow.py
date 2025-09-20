@@ -68,6 +68,8 @@ FILTER_RULES = {
                     "TUINILONPK",
                     "THECAO",
                     "TUI GIAY LON",
+                    "BAOTRUMNILON_20",
+                    "PBH_VANG",
                 ],
             },
             {
@@ -134,6 +136,8 @@ FILTER_RULES = {
                     "TUINILONPK",
                     "THECAO",
                     "TUI GIAY LON",
+                    "BAOTRUMNILON_20",
+                    "PBH_VANG",
                 ],
             },
             {
@@ -238,16 +242,24 @@ def fetch_data(token: str, is_online: bool, limit: int = 50) -> List[Dict]:
 
 
 def is_valid_phone(phone: str) -> bool:
-    """Validate phone number format"""
+    """Validate Vietnamese phone number format"""
     if not phone:
         return False
 
-    # Remove any spaces or dashes
-    phone = re.sub(r"[\s-]", "", phone)
+    # Remove any spaces, dashes, dots, or parentheses
+    phone = re.sub(r"[\s\-\.\(\)]", "", phone)
 
-    # Basic Vietnamese phone number validation (adjust as needed)
-    pattern = r"^(0|\+84)(\d{9,10})$"
-    return bool(re.match(pattern, phone))
+    # Vietnamese phone number patterns:
+    # - Mobile: 0 + 3/5/7/8/9 + 8 digits = 10 digits total
+    # - Or with +84: +84 + 3/5/7/8/9 + 8 digits
+    # - Or with 84: 84 + 3/5/7/8/9 + 8 digits (without +)
+    patterns = [
+        r"^0[35789][0-9]{8}$",     # 0 + mobile prefix + 8 digits
+        r"^\+84[35789][0-9]{8}$",  # +84 + mobile prefix + 8 digits
+        r"^84[35789][0-9]{8}$"     # 84 + mobile prefix + 8 digits (without +)
+    ]
+
+    return any(re.match(pattern, phone) for pattern in patterns)
 
 
 def apply_filters(data: List[Dict], is_online: bool) -> List[Dict]:
