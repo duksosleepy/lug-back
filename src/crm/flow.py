@@ -1,5 +1,7 @@
+import asyncio
 import io
 import json
+import os
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -253,23 +255,29 @@ def is_valid_phone(phone: str) -> bool:
     # - Mobile: 0 + 3/5/7/8/9 + 8 digits = 10 digits total
     # - Or with +84: +84 + 3/5/7/8/9 + 8 digits
     # - Or with 84: 84 + 3/5/7/8/9 + 8 digits (without +)
+    # - Or with international codes: 001 + 0 + 3/5/7/8/9 + 8 digits
     patterns = [
         r"^0[35789][0-9]{8}$",     # 0 + mobile prefix + 8 digits
         r"^\+84[35789][0-9]{8}$",  # +84 + mobile prefix + 8 digits
-        r"^84[35789][0-9]{8}$"     # 84 + mobile prefix + 8 digits (without +)
+        r"^84[35789][0-9]{8}$",    # 84 + mobile prefix + 8 digits (without +)
+        r"^001[035789][0-9]{8}$"   # 001 + 0/3/5/7/8/9 + 8 digits
     ]
 
     return any(re.match(pattern, phone) for pattern in patterns)
 
 
-def apply_filters(data: List[Dict], is_online: bool) -> List[Dict]:
-    """Apply filter rules to the data based on processor type"""
+def apply_filters(data: List[Dict], is_online: bool) -> tuple[List[Dict], List[Dict], List[Dict]]:
+    """Apply filter rules to the data based on processor type and collect invalid phone records and KL phone records"""
     processor_key = "online_processor" if is_online else "offline_processor"
     filters = FILTER_RULES[processor_key]["filters"]
     filtered_data = []
+    invalid_phone_records = []
+    kl_phone_records = []
 
     for item in data:
         should_remove = False
+        is_invalid_phone = False
+        is_kl_phone = False
 
         for filter_rule in filters:
             filter_type = filter_rule["type"]
@@ -297,7 +305,13 @@ def apply_filters(data: List[Dict], is_online: bool) -> List[Dict]:
                         break
 
             elif filter_type == "exclude_equals":
-                if value and str(value).upper() in [
+                # Special handling for KL phone number filter
+                if filter_rule.get("name") == "kl_test_records_filter":
+                    phone_value = str(value) if value else ""
+                    if phone_value == "0912345678":
+                        is_kl_phone = True
+                        should_remove = True
+                elif value and str(value).upper() in [
                     v.upper() for v in filter_rule["values"]
                 ]:
                     should_remove = True
@@ -321,14 +335,23 @@ def apply_filters(data: List[Dict], is_online: bool) -> List[Dict]:
             elif filter_type == "validation_function":
                 function_name = filter_rule["function"]
                 if function_name == "is_valid_phone":
-                    # If the phone is valid, KEEP the record (don't remove)
-                    # If the phone is invalid, REMOVE the record
-                    if not is_valid_phone(str(value) if value else ""):
+                    phone_value = str(value) if value else ""
+                    # Check if phone is invalid and not the test phone number
+                    if not is_valid_phone(phone_value) and phone_value != "0912345678":
+                        is_invalid_phone = True
                         should_remove = True
 
             # If any filter marks the item for removal, break early
             if should_remove:
                 break
+
+        # Collect KL phone records (test phone number)
+        if is_kl_phone:
+            kl_phone_records.append(item)
+
+        # Collect invalid phone records (excluding test phone)
+        if is_invalid_phone:
+            invalid_phone_records.append(item)
 
         if not should_remove:
             filtered_data.append(item)
@@ -336,7 +359,13 @@ def apply_filters(data: List[Dict], is_online: bool) -> List[Dict]:
     logger.info(
         f"Filtered {len(data)} records down to {len(filtered_data)} records"
     )
-    return filtered_data
+    logger.info(
+        f"Found {len(invalid_phone_records)} records with invalid phone numbers"
+    )
+    logger.info(
+        f"Found {len(kl_phone_records)} records with KL phone numbers"
+    )
+    return filtered_data, invalid_phone_records, kl_phone_records
 
 
 def transform_data(sales_data: List[Dict]) -> List[Dict]:
@@ -382,6 +411,98 @@ def transform_data(sales_data: List[Dict]) -> List[Dict]:
         )
 
     return transformed_data
+
+
+async def send_kl_records_to_api(kl_records: List[Dict]) -> Dict:
+    """Send KL phone number records to the API endpoint"""
+    if not kl_records:
+        logger.info("No KL phone records to send")
+        return {"status": "no_data", "message": "No KL phone records to send"}
+
+    try:
+        # Get the API endpoint and token from settings
+        api_endpoint = app_settings.get_env("API_ENDPOINT")
+        xc_token = app_settings.get_env("XC_TOKEN")
+
+        if not api_endpoint:
+            logger.error("API_ENDPOINT environment variable not set")
+            return {"status": "error", "message": "API endpoint not configured"}
+
+        if not xc_token:
+            logger.warning("XC_TOKEN environment variable not set")
+            xc_token = ""
+
+        # Transform KL records to the required API format
+        transformed_records = []
+        for record in kl_records:
+            # Convert date format from datetime to YYYY-MM-DD if needed
+            date_str = record.get("Ngay_Ct", "")
+            if date_str and len(date_str) >= 10:
+                date_str = date_str[:10]
+
+            # Format numeric values
+            def format_numeric(value):
+                if value is None:
+                    return ""
+                if isinstance(value, (int, float)) and float(value).is_integer():
+                    return str(int(value))
+                return str(value)
+
+            transformed_record = {
+                "ngay_ct": date_str,
+                "ma_ct": record.get("Ma_Ct", ""),
+                "so_ct": str(record.get("So_Ct", "")).zfill(4) if record.get("So_Ct") else "",
+                "ma_bo_phan": record.get("Ma_BP", ""),
+                "ma_don_hang": record.get("Ma_Don_Hang", ""),
+                "ten_khach_hang": record.get("Ten_Khach_Hang", ""),
+                "so_dien_thoai": record.get("So_Dien_Thoai", ""),
+                "tinh_thanh": record.get("Tinh_Thanh", ""),
+                "quan_huyen": record.get("Quan_Huyen", ""),
+                "phuong_xa": record.get("Phuong_Xa", ""),
+                "dia_chi": record.get("Dia_Chi", ""),
+                "ma_hang": record.get("Ma_Hang_Old", ""),
+                "ten_hang": record.get("Ten_Hang", ""),
+                "imei": record.get("Imei", ""),
+                "so_luong": format_numeric(record.get("So_Luong")),
+                "doanh_thu": format_numeric(record.get("Doanh_Thu")),
+                "ghi_chu": "KL test phone number record",
+            }
+            transformed_records.append(transformed_record)
+
+        # Send data to API
+        url = f"{api_endpoint}/tables/mtvvlryi3xc0gqd/records"
+        headers = {
+            "Content-Type": "application/json",
+            "xc-token": xc_token,
+        }
+
+        logger.info(f"Sending {len(transformed_records)} KL phone records to API: {url}")
+
+        with httpx.Client(timeout=BATCH_TIMEOUT) as client:
+            response = client.post(url, headers=headers, json=transformed_records)
+            response.raise_for_status()
+
+            logger.info(f"Successfully sent {len(transformed_records)} KL phone records to API")
+            return {
+                "status": "success",
+                "message": f"Successfully sent {len(transformed_records)} KL phone records to API",
+                "records_sent": len(transformed_records)
+            }
+
+    except httpx.HTTPError as e:
+        logger.error(f"Failed to send KL phone records to API: {e}")
+        return {
+            "status": "error",
+            "message": f"Failed to send KL phone records to API: {e}",
+            "records_attempted": len(kl_records)
+        }
+    except Exception as e:
+        logger.error(f"Unexpected error sending KL phone records: {e}")
+        return {
+            "status": "error",
+            "message": f"Unexpected error sending KL phone records: {e}",
+            "records_attempted": len(kl_records)
+        }
 
 
 def submit_batch(batch_data: List[Dict]) -> Dict:
@@ -462,10 +583,10 @@ def process_data():
 
         # Step 4: Apply filters to both datasets
         logger.info("Applying filters to online data...")
-        filtered_online_data = apply_filters(online_data, is_online=True)
+        filtered_online_data, invalid_online_phones, kl_online_phones = apply_filters(online_data, is_online=True)
 
         logger.info("Applying filters to offline data...")
-        filtered_offline_data = apply_filters(offline_data, is_online=False)
+        filtered_offline_data, invalid_offline_phones, kl_offline_phones = apply_filters(offline_data, is_online=False)
 
         # Step 5: Combine filtered data
         all_filtered_data = filtered_online_data + filtered_offline_data
@@ -473,9 +594,36 @@ def process_data():
             f"Total filtered records: {len(all_filtered_data)} (Online: {len(filtered_online_data)}, Offline: {len(filtered_offline_data)})"
         )
 
-        # Step 5.1: Apply product mapping to records with Ma_Hang field
+        # Step 5.1: Split records where So_Luong > 1
+        logger.info("Splitting records with So_Luong > 1...")
+        all_filtered_data = split_quantity_records(all_filtered_data)
+
+        # Step 5.2: Apply product mapping to records with Ma_Hang field
         logger.info("Applying product mapping to all filtered data...")
         all_filtered_data = apply_product_mapping(all_filtered_data)
+
+        # Step 5.3: Split the processed data back into online/offline for email reporting
+        # Determine which records are online vs offline based on original data IDs or other identifiers
+        split_online_data = []
+        split_offline_data = []
+
+        # Create sets of original record identifiers for fast lookup
+        online_ids = {(item.get("So_Ct"), item.get("Ma_Ct"), item.get("Ten_Khach_Hang"), item.get("So_Dien_Thoai")) for item in filtered_online_data}
+
+        for item in all_filtered_data:
+            record_id = (item.get("So_Ct"), item.get("Ma_Ct"), item.get("Ten_Khach_Hang"), item.get("So_Dien_Thoai"))
+            if record_id in online_ids:
+                split_online_data.append(item)
+            else:
+                split_offline_data.append(item)
+
+        # Update the variables used for email reporting
+        filtered_online_data = split_online_data
+        filtered_offline_data = split_offline_data
+
+        logger.info(
+            f"After splitting - Online: {len(filtered_online_data)}, Offline: {len(filtered_offline_data)}"
+        )
 
         # Log sample data if available for debugging
         if online_data:
@@ -511,7 +659,20 @@ def process_data():
             )
             # Send email even if no data to submit
             send_completion_email([], [], negative_records)
-            return {"status": "no_data", "message": "No data to submit"}
+
+        # Step 10: Send KL phone records to API if any exist (common for both paths)
+        kl_records = kl_online_phones + kl_offline_phones
+        if kl_records:
+            logger.info("Sending KL phone records to API...")
+            kl_result = asyncio.run(send_kl_records_to_api(kl_records))
+            logger.info(f"KL phone records API result: {kl_result}")
+
+        # Step 11: Send invalid phone records email if any exist (common for both paths)
+        if invalid_online_phones or invalid_offline_phones:
+            logger.info("Sending invalid phone records email...")
+            send_invalid_phone_email(invalid_online_phones, invalid_offline_phones)
+
+        return result if batch_data else {"status": "no_data", "message": "No data to submit"}
 
     except Exception as e:
         logger.error(f"An error occurred in the data pipeline: {e}")
@@ -578,7 +739,9 @@ def create_excel_file(data: List[Dict], filename: str) -> str:
 
             # Get the corresponding field name or use None if not found
             field_name = field_mapping.get(header)
-            if field_name and field_name in item:
+            if header == "Ghi chú":
+                row[header] = ""  # Always set Ghi chú to empty string
+            elif field_name and field_name in item:
                 row[header] = item[field_name]
             else:
                 row[header] = None  # Fill with null if field doesn't exist
@@ -627,6 +790,52 @@ def filter_negative_records(data: List[Dict]) -> List[Dict]:
             negative_records.append(item)
 
     return negative_records
+
+
+def split_quantity_records(data: List[Dict]) -> List[Dict]:
+    """Split records where So_Luong > 1 into multiple records with So_Luong = 1
+    and divide Doanh_Thu proportionally
+
+    Args:
+        data: List of dictionaries containing the data
+
+    Returns:
+        List of dictionaries with split records
+    """
+    split_data = []
+    original_count = len(data)
+
+    for item in data:
+        so_luong = item.get("So_Luong", 1)
+        doanh_thu = item.get("Doanh_Thu", 0)
+
+        # Convert to numeric for processing
+        try:
+            so_luong = int(float(so_luong)) if so_luong is not None else 1
+        except (ValueError, TypeError):
+            so_luong = 1
+
+        try:
+            doanh_thu = float(doanh_thu) if doanh_thu is not None else 0
+        except (ValueError, TypeError):
+            doanh_thu = 0
+
+        if so_luong > 1:
+            # Calculate Doanh_Thu per unit
+            doanh_thu_per_unit = doanh_thu / so_luong
+
+            # Create multiple records with So_Luong = 1 and split Doanh_Thu
+            for _ in range(so_luong):
+                new_record = item.copy()
+                new_record["So_Luong"] = 1
+                new_record["Doanh_Thu"] = doanh_thu_per_unit
+                split_data.append(new_record)
+        else:
+            # Keep original record if So_Luong <= 1
+            split_data.append(item)
+
+    logger.info(f"Split {original_count} records into {len(split_data)} records based on So_Luong")
+    return split_data
 
 
 def apply_product_mapping(data: List[Dict]) -> List[Dict]:
@@ -724,8 +933,6 @@ def apply_product_mapping(data: List[Dict]) -> List[Dict]:
 
         finally:
             # Clean up temporary file
-            import os
-
             try:
                 os.unlink(temp_data_path)
             except Exception as e:
@@ -823,8 +1030,6 @@ def send_completion_email(
             logger.warning("Failed to send completion email")
 
         # Clean up temporary files
-        import os
-
         try:
             os.unlink(online_data_file)
             os.unlink(offline_data_file)
@@ -836,6 +1041,180 @@ def send_completion_email(
         logger.error(f"Failed to send completion email: {e}", exc_info=True)
         # Re-raise the exception so it can be handled by the calling function
         raise
+
+
+def send_invalid_phone_email(
+    invalid_online_records: List[Dict],
+    invalid_offline_records: List[Dict],
+):
+    """Send email with invalid phone number records.
+
+    Args:
+        invalid_online_records: Online records with invalid phone numbers
+        invalid_offline_records: Offline records with invalid phone numbers
+    """
+    try:
+        # Generate timestamp for filenames
+        task_runtime = datetime.now()
+        date_str = task_runtime.strftime("%Y%m%d_%H%M%S")
+
+        attachment_paths = []
+
+        # Create Excel files only if there are records
+        if invalid_online_records:
+            online_invalid_file = create_excel_file(
+                invalid_online_records, f"Invalid_Phone_Online_{date_str}.xlsx"
+            )
+            attachment_paths.append({
+                "path": online_invalid_file,
+                "name": f"Invalid_Phone_Online_{date_str}.xlsx",
+            })
+
+        if invalid_offline_records:
+            offline_invalid_file = create_excel_file(
+                invalid_offline_records, f"Invalid_Phone_Offline_{date_str}.xlsx"
+            )
+            attachment_paths.append({
+                "path": offline_invalid_file,
+                "name": f"Invalid_Phone_Offline_{date_str}.xlsx",
+            })
+
+        # Only send email if there are invalid records
+        if not attachment_paths:
+            logger.info("No invalid phone records to send")
+            return
+
+        # Email recipients based on data type
+        offline_recipients = [
+            "songkhoi123@gmail.com",
+            "nam.nguyen@lug.vn",
+            "dang.le@sangtam.com",
+            "tan.nguyen@sangtam.com"
+        ]
+
+        online_recipients = [
+            "songkhoi123@gmail.com",
+            "nam.nguyen@lug.vn",
+            "dang.le@sangtam.com",
+            "tan.nguyen@sangtam.com",
+            "kiet.huynh@sangtam.com"
+        ]
+
+        # Send separate emails for online and offline if both have invalid records
+        if invalid_online_records and invalid_offline_records:
+            # Send online invalid records
+            subject_online = f"Invalid Phone Numbers - Online Data - {date_str}"
+            body_online = f"""
+            Phát hiện số điện thoại không hợp lệ trong dữ liệu CRM Online.
+
+            Thời gian kiểm tra: {task_runtime.strftime("%Y-%m-%d %H:%M:%S")}
+
+            Tóm tắt:
+            - Số bản ghi online có số điện thoại không hợp lệ: {len(invalid_online_records)}
+
+            Tệp đính kèm:
+            - Invalid_Phone_Online_{date_str}.xlsx: Dữ liệu online có số điện thoại không hợp lệ
+
+            Lưu ý: Đây không bao gồm số điện thoại test (0912345678).
+
+            Đây là email được gửi tự động.
+            """
+
+            send_notification_email(
+                to=online_recipients,
+                subject=subject_online,
+                body=body_online,
+                attachment_paths=[attachment_paths[0]]  # Online file
+            )
+
+            # Send offline invalid records
+            subject_offline = f"Invalid Phone Numbers - Offline Data - {date_str}"
+            body_offline = f"""
+            Phát hiện số điện thoại không hợp lệ trong dữ liệu CRM Offline.
+
+            Thời gian kiểm tra: {task_runtime.strftime("%Y-%m-%d %H:%M:%S")}
+
+            Tóm tắt:
+            - Số bản ghi offline có số điện thoại không hợp lệ: {len(invalid_offline_records)}
+
+            Tệp đính kèm:
+            - Invalid_Phone_Offline_{date_str}.xlsx: Dữ liệu offline có số điện thoại không hợp lệ
+
+            Lưu ý: Đây không bao gồm số điện thoại test (0912345678).
+
+            Đây là email được gửi tự động.
+            """
+
+            send_notification_email(
+                to=offline_recipients,
+                subject=subject_offline,
+                body=body_offline,
+                attachment_paths=[attachment_paths[1]]  # Offline file
+            )
+
+        elif invalid_online_records:
+            # Send only online records
+            subject = f"Invalid Phone Numbers - Online Data - {date_str}"
+            body = f"""
+            Phát hiện số điện thoại không hợp lệ trong dữ liệu CRM Online.
+
+            Thời gian kiểm tra: {task_runtime.strftime("%Y-%m-%d %H:%M:%S")}
+
+            Tóm tắt:
+            - Số bản ghi online có số điện thoại không hợp lệ: {len(invalid_online_records)}
+
+            Tệp đính kèm:
+            - Invalid_Phone_Online_{date_str}.xlsx: Dữ liệu online có số điện thoại không hợp lệ
+
+            Lưu ý: Đây không bao gồm số điện thoại test (0912345678).
+
+            Đây là email được gửi tự động.
+            """
+
+            send_notification_email(
+                to=online_recipients,
+                subject=subject,
+                body=body,
+                attachment_paths=attachment_paths
+            )
+
+        elif invalid_offline_records:
+            # Send only offline records
+            subject = f"Invalid Phone Numbers - Offline Data - {date_str}"
+            body = f"""
+            Phát hiện số điện thoại không hợp lệ trong dữ liệu CRM Offline.
+
+            Thời gian kiểm tra: {task_runtime.strftime("%Y-%m-%d %H:%M:%S")}
+
+            Tóm tắt:
+            - Số bản ghi offline có số điện thoại không hợp lệ: {len(invalid_offline_records)}
+
+            Tệp đính kèm:
+            - Invalid_Phone_Offline_{date_str}.xlsx: Dữ liệu offline có số điện thoại không hợp lệ
+
+            Lưu ý: Đây không bao gồm số điện thoại test (0912345678).
+
+            Đây là email được gửi tự động.
+            """
+
+            send_notification_email(
+                to=offline_recipients,
+                subject=subject,
+                body=body,
+                attachment_paths=attachment_paths
+            )
+
+        logger.info("Invalid phone records email sent successfully")
+
+        # Clean up temporary files
+        for attachment in attachment_paths:
+            try:
+                os.unlink(attachment["path"])
+            except Exception as e:
+                logger.warning(f"Failed to clean up temporary file {attachment['path']}: {e}")
+
+    except Exception as e:
+        logger.error(f"Failed to send invalid phone records email: {e}", exc_info=True)
 
 
 # Kept for backward compatibility

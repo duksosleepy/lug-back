@@ -14,9 +14,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from src.accounting.api import router as accounting_router
 from src.sapo_sync import SapoSyncRequest, sync_mysapo, sync_mysapogo
 from src.settings import app_settings
-from src.accounting.api import router as accounting_router
 from src.util import validate_excel_file
 from src.util.logging import setup_logging
 from src.util.logging.middleware import setup_fastapi_logging
