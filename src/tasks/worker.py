@@ -427,6 +427,71 @@ def sync_pending_registrations(self):
                     if not copy_records_to_warranty(client, records_to_copy):
                         continue
 
+                    # 5.1. Gửi dữ liệu đến CRM ngay khi matching thành công
+                    try:
+                        crm_target_url = app_settings.get_env("CRM_TARGET_URL")
+                        crm_api_key = app_settings.get_env("CRM_API_KEY")
+
+                        if crm_target_url and crm_api_key:
+                            # Transform records_to_copy to CRM format (same as server.py)
+                            crm_records = []
+                            for record in records_to_copy:
+                                # Extract date part only from datetime string (YYYY-MM-DD)
+                                date_str = record.get("ngay_ct", "")
+                                if date_str and len(date_str) >= 10:
+                                    date_str = date_str[:10]
+
+                                crm_record = {
+                                    "master": {
+                                        "ngayCT": date_str,
+                                        "maCT": record.get("ma_ct", ""),
+                                        "soCT": record.get("so_ct", ""),
+                                        "maBoPhan": record.get("ma_bo_phan", ""),
+                                        "maDonHang": record.get("ma_don_hang", ""),
+                                        "tenKhachHang": customer_name,
+                                        "soDienThoai": formatted_phone,
+                                        "tinhThanh": record.get("tinh_thanh", ""),
+                                        "quanHuyen": record.get("quan_huyen", ""),
+                                        "phuongXa": record.get("phuong_xa", ""),
+                                        "diaChi": record.get("dia_chi", ""),
+                                    },
+                                    "detail": [{
+                                        "maHang": record.get("ma_hang", ""),
+                                        "tenHang": record.get("ten_hang", ""),
+                                        "imei": record.get("imei", ""),
+                                        "soLuong": record.get("so_luong", 1),
+                                        "doanhThu": record.get("doanh_thu", 0),
+                                    }]
+                                }
+                                crm_records.append(crm_record)
+
+                            # Prepare CRM payload (same format as server.py)
+                            crm_payload = {
+                                "apikey": crm_api_key,
+                                "data": crm_records
+                            }
+
+                            logger.info(f"Sending {len(crm_records)} reverse match warranty records to CRM: {crm_target_url}")
+                            crm_response = client.post(
+                                crm_target_url,
+                                headers={"Content-Type": "application/json"},
+                                json=crm_payload,
+                                timeout=30.0
+                            )
+
+                            if crm_response.status_code in (200, 201):
+                                logger.info(f"Successfully sent reverse match warranty records to CRM")
+                            else:
+                                logger.warning(
+                                    f"CRM integration failed for reverse match: {crm_response.status_code} - {crm_response.text}"
+                                )
+                        else:
+                            logger.info("CRM_TARGET_URL or CRM_API_KEY not configured, skipping CRM integration for reverse match")
+                    except Exception as crm_e:
+                        # CRM integration failure should not affect warranty registration
+                        logger.error(f"CRM integration error for reverse match (non-blocking): {str(crm_e)}")
+                        # Continue with warranty process even if CRM fails
+
                     # 6. Xóa bản ghi gốc từ bảng chính
                     delete_original_records(client, record_ids)
 
