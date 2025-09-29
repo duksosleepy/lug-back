@@ -257,16 +257,18 @@ def is_valid_phone(phone: str) -> bool:
     # - Or with 84: 84 + 3/5/7/8/9 + 8 digits (without +)
     # - Or with international codes: 001 + 0 + 3/5/7/8/9 + 8 digits
     patterns = [
-        r"^0[35789][0-9]{8}$",     # 0 + mobile prefix + 8 digits
+        r"^0[35789][0-9]{8}$",  # 0 + mobile prefix + 8 digits
         r"^\+84[35789][0-9]{8}$",  # +84 + mobile prefix + 8 digits
-        r"^84[35789][0-9]{8}$",    # 84 + mobile prefix + 8 digits (without +)
-        r"^001[035789][0-9]{8}$"   # 001 + 0/3/5/7/8/9 + 8 digits
+        r"^84[35789][0-9]{8}$",  # 84 + mobile prefix + 8 digits (without +)
+        r"^001[035789][0-9]{8}$",  # 001 + 0/3/5/7/8/9 + 8 digits
     ]
 
     return any(re.match(pattern, phone) for pattern in patterns)
 
 
-def apply_filters(data: List[Dict], is_online: bool) -> tuple[List[Dict], List[Dict], List[Dict]]:
+def apply_filters(
+    data: List[Dict], is_online: bool
+) -> tuple[List[Dict], List[Dict], List[Dict]]:
     """Apply filter rules to the data based on processor type and collect invalid phone records and KL phone records"""
     processor_key = "online_processor" if is_online else "offline_processor"
     filters = FILTER_RULES[processor_key]["filters"]
@@ -337,7 +339,10 @@ def apply_filters(data: List[Dict], is_online: bool) -> tuple[List[Dict], List[D
                 if function_name == "is_valid_phone":
                     phone_value = str(value) if value else ""
                     # Check if phone is invalid and not the test phone number
-                    if not is_valid_phone(phone_value) and phone_value != "0912345678":
+                    if (
+                        not is_valid_phone(phone_value)
+                        and phone_value != "0912345678"
+                    ):
                         is_invalid_phone = True
                         should_remove = True
 
@@ -362,9 +367,7 @@ def apply_filters(data: List[Dict], is_online: bool) -> tuple[List[Dict], List[D
     logger.info(
         f"Found {len(invalid_phone_records)} records with invalid phone numbers"
     )
-    logger.info(
-        f"Found {len(kl_phone_records)} records with KL phone numbers"
-    )
+    logger.info(f"Found {len(kl_phone_records)} records with KL phone numbers")
     return filtered_data, invalid_phone_records, kl_phone_records
 
 
@@ -444,14 +447,19 @@ async def send_kl_records_to_api(kl_records: List[Dict]) -> Dict:
             def format_numeric(value):
                 if value is None:
                     return ""
-                if isinstance(value, (int, float)) and float(value).is_integer():
+                if (
+                    isinstance(value, (int, float))
+                    and float(value).is_integer()
+                ):
                     return str(int(value))
                 return str(value)
 
             transformed_record = {
                 "ngay_ct": date_str,
                 "ma_ct": record.get("Ma_Ct", ""),
-                "so_ct": str(record.get("So_Ct", "")).zfill(4) if record.get("So_Ct") else "",
+                "so_ct": str(record.get("So_Ct", "")).zfill(4)
+                if record.get("So_Ct")
+                else "",
                 "ma_bo_phan": record.get("Ma_BP", ""),
                 "ma_don_hang": record.get("Ma_Don_Hang", ""),
                 "ten_khach_hang": record.get("Ten_Khach_Hang", ""),
@@ -476,17 +484,23 @@ async def send_kl_records_to_api(kl_records: List[Dict]) -> Dict:
             "xc-token": xc_token,
         }
 
-        logger.info(f"Sending {len(transformed_records)} KL phone records to API: {url}")
+        logger.info(
+            f"Sending {len(transformed_records)} KL phone records to API: {url}"
+        )
 
         with httpx.Client(timeout=BATCH_TIMEOUT) as client:
-            response = client.post(url, headers=headers, json=transformed_records)
+            response = client.post(
+                url, headers=headers, json=transformed_records
+            )
             response.raise_for_status()
 
-            logger.info(f"Successfully sent {len(transformed_records)} KL phone records to API")
+            logger.info(
+                f"Successfully sent {len(transformed_records)} KL phone records to API"
+            )
             return {
                 "status": "success",
                 "message": f"Successfully sent {len(transformed_records)} KL phone records to API",
-                "records_sent": len(transformed_records)
+                "records_sent": len(transformed_records),
             }
 
     except httpx.HTTPError as e:
@@ -494,14 +508,14 @@ async def send_kl_records_to_api(kl_records: List[Dict]) -> Dict:
         return {
             "status": "error",
             "message": f"Failed to send KL phone records to API: {e}",
-            "records_attempted": len(kl_records)
+            "records_attempted": len(kl_records),
         }
     except Exception as e:
         logger.error(f"Unexpected error sending KL phone records: {e}")
         return {
             "status": "error",
             "message": f"Unexpected error sending KL phone records: {e}",
-            "records_attempted": len(kl_records)
+            "records_attempted": len(kl_records),
         }
 
 
@@ -583,10 +597,14 @@ def process_data():
 
         # Step 4: Apply filters to both datasets
         logger.info("Applying filters to online data...")
-        filtered_online_data, invalid_online_phones, kl_online_phones = apply_filters(online_data, is_online=True)
+        filtered_online_data, invalid_online_phones, kl_online_phones = (
+            apply_filters(online_data, is_online=True)
+        )
 
         logger.info("Applying filters to offline data...")
-        filtered_offline_data, invalid_offline_phones, kl_offline_phones = apply_filters(offline_data, is_online=False)
+        filtered_offline_data, invalid_offline_phones, kl_offline_phones = (
+            apply_filters(offline_data, is_online=False)
+        )
 
         # Step 5: Combine filtered data
         all_filtered_data = filtered_online_data + filtered_offline_data
@@ -608,10 +626,23 @@ def process_data():
         split_offline_data = []
 
         # Create sets of original record identifiers for fast lookup
-        online_ids = {(item.get("So_Ct"), item.get("Ma_Ct"), item.get("Ten_Khach_Hang"), item.get("So_Dien_Thoai")) for item in filtered_online_data}
+        online_ids = {
+            (
+                item.get("So_Ct"),
+                item.get("Ma_Ct"),
+                item.get("Ten_Khach_Hang"),
+                item.get("So_Dien_Thoai"),
+            )
+            for item in filtered_online_data
+        }
 
         for item in all_filtered_data:
-            record_id = (item.get("So_Ct"), item.get("Ma_Ct"), item.get("Ten_Khach_Hang"), item.get("So_Dien_Thoai"))
+            record_id = (
+                item.get("So_Ct"),
+                item.get("Ma_Ct"),
+                item.get("Ten_Khach_Hang"),
+                item.get("So_Dien_Thoai"),
+            )
             if record_id in online_ids:
                 split_online_data.append(item)
             else:
@@ -670,9 +701,15 @@ def process_data():
         # Step 11: Send invalid phone records email if any exist (common for both paths)
         if invalid_online_phones or invalid_offline_phones:
             logger.info("Sending invalid phone records email...")
-            send_invalid_phone_email(invalid_online_phones, invalid_offline_phones)
+            send_invalid_phone_email(
+                invalid_online_phones, invalid_offline_phones
+            )
 
-        return result if batch_data else {"status": "no_data", "message": "No data to submit"}
+        return (
+            result
+            if batch_data
+            else {"status": "no_data", "message": "No data to submit"}
+        )
 
     except Exception as e:
         logger.error(f"An error occurred in the data pipeline: {e}")
@@ -834,7 +871,9 @@ def split_quantity_records(data: List[Dict]) -> List[Dict]:
             # Keep original record if So_Luong <= 1
             split_data.append(item)
 
-    logger.info(f"Split {original_count} records into {len(split_data)} records based on So_Luong")
+    logger.info(
+        f"Split {original_count} records into {len(split_data)} records based on So_Luong"
+    )
     return split_data
 
 
@@ -1065,19 +1104,24 @@ def send_invalid_phone_email(
             online_invalid_file = create_excel_file(
                 invalid_online_records, f"Invalid_Phone_Online_{date_str}.xlsx"
             )
-            attachment_paths.append({
-                "path": online_invalid_file,
-                "name": f"Invalid_Phone_Online_{date_str}.xlsx",
-            })
+            attachment_paths.append(
+                {
+                    "path": online_invalid_file,
+                    "name": f"Invalid_Phone_Online_{date_str}.xlsx",
+                }
+            )
 
         if invalid_offline_records:
             offline_invalid_file = create_excel_file(
-                invalid_offline_records, f"Invalid_Phone_Offline_{date_str}.xlsx"
+                invalid_offline_records,
+                f"Invalid_Phone_Offline_{date_str}.xlsx",
             )
-            attachment_paths.append({
-                "path": offline_invalid_file,
-                "name": f"Invalid_Phone_Offline_{date_str}.xlsx",
-            })
+            attachment_paths.append(
+                {
+                    "path": offline_invalid_file,
+                    "name": f"Invalid_Phone_Offline_{date_str}.xlsx",
+                }
+            )
 
         # Only send email if there are invalid records
         if not attachment_paths:
@@ -1089,7 +1133,7 @@ def send_invalid_phone_email(
             "songkhoi123@gmail.com",
             "nam.nguyen@lug.vn",
             "dang.le@sangtam.com",
-            "tan.nguyen@sangtam.com"
+            "tan.nguyen@sangtam.com",
         ]
 
         online_recipients = [
@@ -1097,7 +1141,7 @@ def send_invalid_phone_email(
             "nam.nguyen@lug.vn",
             "dang.le@sangtam.com",
             "tan.nguyen@sangtam.com",
-            "kiet.huynh@sangtam.com"
+            "kiet.huynh@sangtam.com",
         ]
 
         # Send separate emails for online and offline if both have invalid records
@@ -1124,11 +1168,13 @@ def send_invalid_phone_email(
                 to=online_recipients,
                 subject=subject_online,
                 body=body_online,
-                attachment_paths=[attachment_paths[0]]  # Online file
+                attachment_paths=[attachment_paths[0]],  # Online file
             )
 
             # Send offline invalid records
-            subject_offline = f"Invalid Phone Numbers - Offline Data - {date_str}"
+            subject_offline = (
+                f"Invalid Phone Numbers - Offline Data - {date_str}"
+            )
             body_offline = f"""
             Phát hiện số điện thoại không hợp lệ trong dữ liệu CRM Offline.
 
@@ -1149,7 +1195,7 @@ def send_invalid_phone_email(
                 to=offline_recipients,
                 subject=subject_offline,
                 body=body_offline,
-                attachment_paths=[attachment_paths[1]]  # Offline file
+                attachment_paths=[attachment_paths[1]],  # Offline file
             )
 
         elif invalid_online_records:
@@ -1175,7 +1221,7 @@ def send_invalid_phone_email(
                 to=online_recipients,
                 subject=subject,
                 body=body,
-                attachment_paths=attachment_paths
+                attachment_paths=attachment_paths,
             )
 
         elif invalid_offline_records:
@@ -1201,7 +1247,7 @@ def send_invalid_phone_email(
                 to=offline_recipients,
                 subject=subject,
                 body=body,
-                attachment_paths=attachment_paths
+                attachment_paths=attachment_paths,
             )
 
         logger.info("Invalid phone records email sent successfully")
@@ -1211,10 +1257,14 @@ def send_invalid_phone_email(
             try:
                 os.unlink(attachment["path"])
             except Exception as e:
-                logger.warning(f"Failed to clean up temporary file {attachment['path']}: {e}")
+                logger.warning(
+                    f"Failed to clean up temporary file {attachment['path']}: {e}"
+                )
 
     except Exception as e:
-        logger.error(f"Failed to send invalid phone records email: {e}", exc_info=True)
+        logger.error(
+            f"Failed to send invalid phone records email: {e}", exc_info=True
+        )
 
 
 # Kept for backward compatibility

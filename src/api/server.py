@@ -803,6 +803,74 @@ async def submit_warranty(request: WarrantyRequest):
                     "message": "Lỗi khi lưu thông tin bảo hành",
                 }
 
+            # Bước 3.1: Gửi dữ liệu khách hàng đến CRM nếu có user match
+            try:
+                crm_target_url = app_settings.get_env("CRM_TARGET_URL")
+                crm_api_key = app_settings.get_env("CRM_API_KEY")
+
+                if crm_target_url and crm_api_key:
+                    # Chuẩn bị dữ liệu CRM theo format trong flow.py
+                    crm_records = []
+
+                    for record in records_to_copy:
+                        # Extract date part only from datetime string (YYYY-MM-DD)
+                        date_str = record.get("ngay_ct", "")
+                        if date_str and len(date_str) >= 10:
+                            date_str = date_str[:10]
+
+                        crm_record = {
+                            "master": {
+                                "ngayCT": date_str,
+                                "maCT": record.get("ma_ct", ""),
+                                "soCT": record.get("so_ct", ""),
+                                "maBoPhan": record.get("ma_bo_phan", ""),
+                                "maDonHang": record.get("ma_don_hang", ""),
+                                "tenKhachHang": request.name,  # Use registered name
+                                "soDienThoai": formatted_phone,  # Use registered phone
+                                "tinhThanh": record.get("tinh_thanh", ""),
+                                "quanHuyen": record.get("quan_huyen", ""),
+                                "phuongXa": record.get("phuong_xa", ""),
+                                "diaChi": record.get("dia_chi", ""),
+                            },
+                            "detail": [
+                                {
+                                    "maHang": record.get("ma_hang", ""),
+                                    "tenHang": record.get("ten_hang", ""),
+                                    "imei": record.get("imei", ""),
+                                    "soLuong": record.get("so_luong", 1),
+                                    "doanhThu": record.get("doanh_thu", 0),
+                                }
+                            ],
+                        }
+                        crm_records.append(crm_record)
+
+                    # Prepare CRM payload
+                    crm_payload = {
+                        "apikey": crm_api_key,
+                        "data": crm_records
+                    }
+
+                    logger.info(f"Sending {len(crm_records)} warranty records to CRM: {crm_target_url}")
+                    crm_response = await client.post(
+                        crm_target_url,
+                        headers={"Content-Type": "application/json"},
+                        json=crm_payload,
+                        timeout=30.0  # Reasonable timeout for CRM call
+                    )
+
+                    if crm_response.status_code in (200, 201):
+                        logger.info(f"Successfully sent warranty records to CRM")
+                    else:
+                        logger.warning(
+                            f"CRM integration failed: {crm_response.status_code} - {crm_response.text}"
+                        )
+                else:
+                    logger.info("CRM_TARGET_URL or CRM_API_KEY not configured, skipping CRM integration")
+            except Exception as crm_e:
+                # CRM integration failure should not affect warranty registration
+                logger.error(f"CRM integration error (non-blocking): {str(crm_e)}")
+                # Continue with warranty process even if CRM fails
+
             # Bước 4: Xóa bản ghi gốc
             delete_url = (
                 f"{app_settings.api_endpoint}/tables/mtvvlryi3xc0gqd/records"
