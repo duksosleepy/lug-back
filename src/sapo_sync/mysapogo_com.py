@@ -453,6 +453,11 @@ def process_page_data(
         if reason_cancel_id is not None:
             cancel_reason = cancel_reasons_lookup.get(reason_cancel_id, "")
 
+        # Extract delivery fee from order
+        delivery_fee = 0
+        if order.get("delivery_fee") and isinstance(order.get("delivery_fee"), dict):
+            delivery_fee = order.get("delivery_fee", {}).get("fee", 0) or 0
+
         line_items = order.get("order_line_items", []) or []
         if not line_items:
             item_info = OrderedDict(
@@ -485,6 +490,10 @@ def process_page_data(
                     ("Tên sản phẩm", ""),
                     # THAY ĐỔI: Sử dụng chuỗi rỗng "" thay vì total_sales
                     ("Tổng tiền hàng", ""),
+                    ("CK đơn hàng(VNĐ)", 0),
+                    ("Phí vận chuyển", delivery_fee),
+                    ("Khách phải trả", 0),
+                    ("Khách đã trả", 0),
                     ("Ghi chú đơn", order.get("note", "")),
                     (
                         "Điện thoại KH",
@@ -540,6 +549,10 @@ def process_page_data(
                         ("Tên sản phẩm", line_item.get("product_name", "")),
                         # THAY ĐỔI: Sử dụng line_amount
                         ("Tổng tiền hàng", line_item.get("line_amount", "")),
+                        ("CK đơn hàng(VNĐ)", 0),
+                        ("Phí vận chuyển", delivery_fee),
+                        ("Khách phải trả", 0),
+                        ("Khách đã trả", 0),
                         ("Ghi chú đơn", order.get("note", "")),
                         (
                             "Điện thoại KH",
