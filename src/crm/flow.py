@@ -959,7 +959,7 @@ def apply_product_mapping(data: List[Dict]) -> List[Dict]:
                         if "Mã hàng" in processed_item:
                             item["Ma_Hang_Old"] = processed_item["Mã hàng"]
                         if "Tên hàng" in processed_item and "Ten_Hang" in item:
-                            item["Ten_Hang"] = processed_item["Tên hàng"]
+                            item["Ten_Hang"] = re.sub(r'\s+', ' ', str(processed_item["Tên hàng"])).strip()
                         processed_index += 1
 
                 updated_data.append(item)
