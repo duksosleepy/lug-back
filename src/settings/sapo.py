@@ -31,7 +31,7 @@ class SapoSettings(BaseSettings):
         self.landing_site_range = self.get_env(
             "SAPO_LANDING_SITE_RANGE", "Landing site!D2:AX"
         )
-        self.data_range = self.get_env("SAPO_DATA_RANGE", "Data!G2:U")
+        self.data_range = self.get_env("SAPO_DATA_RANGE", "Data!G2:Y")
 
     def get_mysapo_net_base_url(self) -> str:
         """
