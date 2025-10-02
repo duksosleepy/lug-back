@@ -318,6 +318,76 @@ def extract_branch(detail_json):
         return ""
 
 
+def extract_prepayment_amount(order):
+    """
+    Extract prepayment amount (CK đơn hàng) from order.prepayments.paid_amount
+    where source is 'customer_prepaid'. Returns 0 if no matching prepayments.
+
+    Args:
+        order (dict): Order data from mysapogo.com API
+
+    Returns:
+        int: Prepayment amount in VND for customer_prepaid source, or 0 if not available
+    """
+    try:
+        prepayments = order.get("prepayments", [])
+
+        # If prepayments is empty or None, return 0
+        if not prepayments:
+            return 0
+
+        # Sum paid_amount from prepayments where source is 'customer_prepaid'
+        total_prepaid = 0
+        for prepayment in prepayments:
+            if isinstance(prepayment, dict):
+                source = prepayment.get("source", "")
+                if source == "customer_prepaid":
+                    paid_amount = prepayment.get("paid_amount", 0)
+                    if paid_amount is not None:
+                        total_prepaid += int(round(float(paid_amount)))
+
+        return total_prepaid
+
+    except (TypeError, ValueError, AttributeError) as e:
+        logger.warning(f"Error extracting customer prepayment amount: {e}")
+        return 0
+
+
+def extract_customer_paid_amount(order):
+    """
+    Extract customer paid amount (Khách đã trả) from order.prepayments.paid_amount
+    where source is 'cod_transfer'. Returns 0 if no matching prepayments.
+
+    Args:
+        order (dict): Order data from mysapogo.com API
+
+    Returns:
+        int: Customer paid amount in VND for cod_transfer source, or 0 if not available
+    """
+    try:
+        prepayments = order.get("prepayments", [])
+
+        # If prepayments is empty or None, return 0
+        if not prepayments:
+            return 0
+
+        # Sum paid_amount from prepayments where source is 'cod_transfer'
+        total_customer_paid = 0
+        for prepayment in prepayments:
+            if isinstance(prepayment, dict):
+                source = prepayment.get("source", "")
+                if source == "cod_transfer":
+                    paid_amount = prepayment.get("paid_amount", 0)
+                    if paid_amount is not None:
+                        total_customer_paid += int(round(float(paid_amount)))
+
+        return total_customer_paid
+
+    except (TypeError, ValueError, AttributeError) as e:
+        logger.warning(f"Error extracting customer paid amount: {e}")
+        return 0
+
+
 async def fetch_and_process_orders(start_date, end_date):
     """Fetch orders from the API and process them according to requirements."""
     adjusted_start_date, adjusted_end_date = get_adjusted_dates(
@@ -458,6 +528,12 @@ def process_page_data(
         if order.get("delivery_fee") and isinstance(order.get("delivery_fee"), dict):
             delivery_fee = order.get("delivery_fee", {}).get("fee", 0) or 0
 
+        # Extract prepayment amount (CK đơn hàng) - only customer_prepaid source
+        ck_don_hang = extract_prepayment_amount(order)
+
+        # Extract customer paid amount (Khách đã trả) - only cod_transfer source
+        khach_da_tra = extract_customer_paid_amount(order)
+
         line_items = order.get("order_line_items", []) or []
         if not line_items:
             item_info = OrderedDict(
@@ -490,10 +566,10 @@ def process_page_data(
                     ("Tên sản phẩm", ""),
                     # THAY ĐỔI: Sử dụng chuỗi rỗng "" thay vì total_sales
                     ("Tổng tiền hàng", ""),
-                    ("CK đơn hàng(VNĐ)", 0),
+                    ("CK đơn hàng(VNĐ)", ck_don_hang),
                     ("Phí vận chuyển", delivery_fee),
-                    ("Khách phải trả", 0),
-                    ("Khách đã trả", 0),
+                    ("Khách phải trả", delivery_fee),  # For orders without line_items: 0 + delivery_fee
+                    ("Khách đã trả", khach_da_tra),
                     ("Ghi chú đơn", order.get("note", "")),
                     (
                         "Điện thoại KH",
@@ -549,10 +625,10 @@ def process_page_data(
                         ("Tên sản phẩm", line_item.get("product_name", "")),
                         # THAY ĐỔI: Sử dụng line_amount
                         ("Tổng tiền hàng", line_item.get("line_amount", "")),
-                        ("CK đơn hàng(VNĐ)", 0),
+                        ("CK đơn hàng(VNĐ)", ck_don_hang),
                         ("Phí vận chuyển", delivery_fee),
-                        ("Khách phải trả", 0),
-                        ("Khách đã trả", 0),
+                        ("Khách phải trả", (line_item.get("line_amount", 0) or 0) + delivery_fee),
+                        ("Khách đã trả", khach_da_tra),
                         ("Ghi chú đơn", order.get("note", "")),
                         (
                             "Điện thoại KH",
