@@ -605,7 +605,7 @@ def process_page_data(
                     ("Tổng tiền hàng", ""),
                     ("CK đơn hàng(VNĐ)", ck_don_hang),
                     ("Phí vận chuyển", delivery_fee),
-                    ("Khách phải trả", delivery_fee),  # For orders without line_items: 0 + delivery_fee
+                    ("Khách phải trả", order.get("total", 0) or 0),  # Use order.total as requested
                     ("Khách đã trả", khach_da_tra),
                     ("Ghi chú đơn", order.get("note", "")),
                     (
@@ -664,7 +664,7 @@ def process_page_data(
                         ("Tổng tiền hàng", line_item.get("line_amount", "")),
                         ("CK đơn hàng(VNĐ)", ck_don_hang),
                         ("Phí vận chuyển", delivery_fee),
-                        ("Khách phải trả", (line_item.get("line_amount", 0) or 0) + delivery_fee),
+                        ("Khách phải trả", order.get("total", 0) or 0),  # Use order.total as requested
                         ("Khách đã trả", khach_da_tra),
                         ("Ghi chú đơn", order.get("note", "")),
                         (
