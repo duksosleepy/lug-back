@@ -356,13 +356,13 @@ def extract_prepayment_amount(order):
 def extract_customer_paid_amount(order):
     """
     Extract customer paid amount (Khách đã trả) from order.prepayments.paid_amount
-    where source is 'cod_transfer'. Returns 0 if no matching prepayments.
+    from all sources. Returns 0 if no prepayments found.
 
     Args:
         order (dict): Order data from mysapogo.com API
 
     Returns:
-        int: Customer paid amount in VND for cod_transfer source, or 0 if not available
+        int: Total customer paid amount in VND from all prepayment sources, or 0 if not available
     """
     try:
         prepayments = order.get("prepayments", [])
@@ -371,15 +371,13 @@ def extract_customer_paid_amount(order):
         if not prepayments:
             return 0
 
-        # Sum paid_amount from prepayments where source is 'cod_transfer'
+        # Sum paid_amount from all prepayments regardless of source
         total_customer_paid = 0
         for prepayment in prepayments:
             if isinstance(prepayment, dict):
-                source = prepayment.get("source", "")
-                if source == "cod_transfer":
-                    paid_amount = prepayment.get("paid_amount", 0)
-                    if paid_amount is not None:
-                        total_customer_paid += int(round(float(paid_amount)))
+                paid_amount = prepayment.get("paid_amount", 0)
+                if paid_amount is not None:
+                    total_customer_paid += int(round(float(paid_amount)))
 
         return total_customer_paid
 
@@ -561,16 +559,16 @@ def process_page_data(
         if order.get("delivery_fee") and isinstance(order.get("delivery_fee"), dict):
             delivery_fee = order.get("delivery_fee", {}).get("fee", 0) or 0
 
-        # Extract prepayment amount (CK đơn hàng) - only customer_prepaid source
+        # Extract prepayment amount - only customer_prepaid source
         prepayment_amount = extract_prepayment_amount(order)
 
         # Extract distributed discount amount from order line items
         distributed_discount_amount = extract_distributed_discount_amount(order)
 
-        # CK đơn hàng = prepayment amount + distributed discount amount
-        ck_don_hang = prepayment_amount + distributed_discount_amount
+        # CK đơn hàng = only distributed discount amount from line items
+        ck_don_hang = distributed_discount_amount
 
-        # Extract customer paid amount (Khách đã trả) - only cod_transfer source
+        # Extract customer paid amount (Khách đã trả) - sum all prepayment sources
         khach_da_tra = extract_customer_paid_amount(order)
 
         line_items = order.get("order_line_items", []) or []
