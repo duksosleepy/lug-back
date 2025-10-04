@@ -388,6 +388,39 @@ def extract_customer_paid_amount(order):
         return 0
 
 
+def extract_distributed_discount_amount(order):
+    """
+    Extract total distributed discount amount from order.order_line_items.distributed_discount_amount.
+    Returns 0 if no line items or no distributed discount amounts found.
+
+    Args:
+        order (dict): Order data from mysapogo.com API
+
+    Returns:
+        int: Total distributed discount amount in VND, or 0 if not available
+    """
+    try:
+        line_items = order.get("order_line_items", [])
+
+        # If line_items is empty or None, return 0
+        if not line_items:
+            return 0
+
+        # Sum distributed_discount_amount from all line items
+        total_distributed_discount = 0
+        for line_item in line_items:
+            if isinstance(line_item, dict):
+                distributed_discount = line_item.get("distributed_discount_amount", 0)
+                if distributed_discount is not None:
+                    total_distributed_discount += int(round(float(distributed_discount)))
+
+        return total_distributed_discount
+
+    except (TypeError, ValueError, AttributeError) as e:
+        logger.warning(f"Error extracting distributed discount amount: {e}")
+        return 0
+
+
 async def fetch_and_process_orders(start_date, end_date):
     """Fetch orders from the API and process them according to requirements."""
     adjusted_start_date, adjusted_end_date = get_adjusted_dates(
@@ -529,7 +562,13 @@ def process_page_data(
             delivery_fee = order.get("delivery_fee", {}).get("fee", 0) or 0
 
         # Extract prepayment amount (CK đơn hàng) - only customer_prepaid source
-        ck_don_hang = extract_prepayment_amount(order)
+        prepayment_amount = extract_prepayment_amount(order)
+
+        # Extract distributed discount amount from order line items
+        distributed_discount_amount = extract_distributed_discount_amount(order)
+
+        # CK đơn hàng = prepayment amount + distributed discount amount
+        ck_don_hang = prepayment_amount + distributed_discount_amount
 
         # Extract customer paid amount (Khách đã trả) - only cod_transfer source
         khach_da_tra = extract_customer_paid_amount(order)
