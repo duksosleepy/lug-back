@@ -302,6 +302,27 @@ def daily_sapo_sync(self):
     from datetime import datetime
 
     try:
+        # Initialize cancel reasons for mysapogo.com sync before starting
+        try:
+            from src.sapo_sync.mysapogo_com import initialize_cancel_reasons
+
+            # Run the async initialization in the sync context
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                success = loop.run_until_complete(initialize_cancel_reasons())
+                if success:
+                    logger.info("Cancel reasons initialized successfully from API")
+                else:
+                    logger.warning("Cancel reasons initialized using fallback data")
+            finally:
+                loop.close()
+        except Exception as e:
+            logger.error(
+                f"Failed to initialize cancel reasons: {str(e)}", exc_info=True
+            )
+            # Continue with sync even if cancel reasons initialization fails
+
         # Lấy ngày 31/12 của năm trước và ngày hiện tại để đồng bộ (format: YYYY-MM-DD)
         today = datetime.now()
         start_date = f"{today.year - 1}-12-31"
