@@ -206,8 +206,8 @@ def fetch_data(token: str, is_online: bool, limit: int = 50) -> List[Dict]:
     current_day_midnight = task_runtime.replace(
         hour=0, minute=0, second=0, microsecond=0
     )
-    target_day_start = current_day_midnight - timedelta(days=3)
-    target_day_end = current_day_midnight - timedelta(days=1)
+    target_day_start = current_day_midnight - timedelta(days=9)
+    target_day_end = current_day_midnight - timedelta(days=2)
 
     # Format dates for API query: >= 5 days ago 00:00:00, < 4 days ago 00:00:00
     date_gte = target_day_start.strftime("%Y-%m-%dT00:00:00")
@@ -959,7 +959,9 @@ def apply_product_mapping(data: List[Dict]) -> List[Dict]:
                         if "Mã hàng" in processed_item:
                             item["Ma_Hang_Old"] = processed_item["Mã hàng"]
                         if "Tên hàng" in processed_item and "Ten_Hang" in item:
-                            item["Ten_Hang"] = re.sub(r'\s+', ' ', str(processed_item["Tên hàng"])).strip()
+                            item["Ten_Hang"] = re.sub(
+                                r"\s+", " ", str(processed_item["Tên hàng"])
+                            ).strip()
                         processed_index += 1
 
                 updated_data.append(item)
@@ -1022,8 +1024,8 @@ def send_completion_email(
         current_day_midnight = task_runtime.replace(
             hour=0, minute=0, second=0, microsecond=0
         )
-        target_day_start = current_day_midnight - timedelta(days=3)
-        target_day_end = current_day_midnight - timedelta(days=1)
+        target_day_start = current_day_midnight - timedelta(days=9)
+        target_day_end = current_day_midnight - timedelta(days=2)
 
         body = f"""
         Xử lý dữ liệu CRM thành công.

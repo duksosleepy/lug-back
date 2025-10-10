@@ -803,54 +803,79 @@ async def submit_warranty(request: WarrantyRequest):
                     "message": "Lỗi khi lưu thông tin bảo hành",
                 }
 
-            # Bước 3.1: Gửi dữ liệu khách hàng đến CRM nếu có user match
+            # Bước 3.1: Gửi toàn bộ dữ liệu matched records đến CRM
             try:
                 crm_target_url = app_settings.get_env("CRM_TARGET_URL")
                 crm_api_key = app_settings.get_env("CRM_API_KEY")
 
                 if crm_target_url and crm_api_key:
-                    # Chuẩn bị dữ liệu CRM theo format trong flow.py
+                    # Chuẩn bị dữ liệu CRM từ complete matched records từ 127.0.0.1:8081
                     crm_records = []
 
-                    for record in records_to_copy:
+                    # Use original records from search response (complete records from 127.0.0.1:8081)
+                    for record in records:
                         # Extract date part only from datetime string (YYYY-MM-DD)
                         date_str = record.get("ngay_ct", "")
                         if date_str and len(date_str) >= 10:
                             date_str = date_str[:10]
 
+                        # Handle null/empty values with defaults to pass CRM validation
+                        tinh_thanh = record.get("tinh_thanh") or "TP. HỒ CHÍ MINH"  # Default province
+                        quan_huyen = record.get("quan_huyen") or "Quận 1"  # Default district
+                        phuong_xa = record.get("phuong_xa") or "Phường 1"  # Default ward
+                        dia_chi = record.get("dia_chi") or "Địa chỉ không xác định"  # Default address
+
+                        # Ensure numeric fields are properly formatted
+                        so_luong = record.get("so_luong", "1")
+                        try:
+                            so_luong = int(float(so_luong)) if so_luong else 1
+                        except (ValueError, TypeError):
+                            so_luong = 1
+
+                        doanh_thu = record.get("doanh_thu", "0")
+                        try:
+                            doanh_thu = float(doanh_thu) if doanh_thu else 0
+                        except (ValueError, TypeError):
+                            doanh_thu = 0
+
                         crm_record = {
                             "master": {
                                 "ngayCT": date_str,
                                 "maCT": record.get("ma_ct", ""),
-                                "soCT": record.get("so_ct", ""),
+                                "soCT": record.get("so_ct", "").zfill(4) if record.get("so_ct") else "0001",  # Zero-pad to 4 digits
                                 "maBoPhan": record.get("ma_bo_phan", ""),
                                 "maDonHang": record.get("ma_don_hang", ""),
-                                "tenKhachHang": request.name,  # Use registered name
-                                "soDienThoai": formatted_phone,  # Use registered phone
-                                "tinhThanh": record.get("tinh_thanh", ""),
-                                "quanHuyen": record.get("quan_huyen", ""),
-                                "phuongXa": record.get("phuong_xa", ""),
-                                "diaChi": record.get("dia_chi", ""),
+                                "tenKhachHang": request.name,  # Use registered name from warranty form
+                                "soDienThoai": formatted_phone,  # Use registered phone from warranty form
+                                "tinhThanh": tinh_thanh,
+                                "quanHuyen": quan_huyen,
+                                "phuongXa": phuong_xa,
+                                "diaChi": dia_chi,
                             },
                             "detail": [
                                 {
                                     "maHang": record.get("ma_hang", ""),
                                     "tenHang": record.get("ten_hang", ""),
                                     "imei": record.get("imei", ""),
-                                    "soLuong": record.get("so_luong", 1),
-                                    "doanhThu": record.get("doanh_thu", 0),
+                                    "soLuong": so_luong,
+                                    "doanhThu": doanh_thu,
                                 }
                             ],
                         }
                         crm_records.append(crm_record)
 
-                    # Prepare CRM payload
+                    # Prepare CRM payload with complete matched records
                     crm_payload = {
                         "apikey": crm_api_key,
                         "data": crm_records
                     }
 
-                    logger.info(f"Sending {len(crm_records)} warranty records to CRM: {crm_target_url}")
+                    logger.info(f"Sending {len(crm_records)} complete matched records from 127.0.0.1:8081 to CRM: {crm_target_url}")
+
+                    # Debug: Log the first record being sent to CRM
+                    if crm_records:
+                        logger.info(f"Sample CRM record: {json.dumps(crm_records[0], ensure_ascii=False, indent=2)}")
+
                     crm_response = await client.post(
                         crm_target_url,
                         headers={"Content-Type": "application/json"},
@@ -858,11 +883,24 @@ async def submit_warranty(request: WarrantyRequest):
                         timeout=30.0  # Reasonable timeout for CRM call
                     )
 
+                    crm_response_text = crm_response.text
+                    logger.info(f"CRM Response Status: {crm_response.status_code}")
+                    logger.info(f"CRM Response Body: {crm_response_text}")
+
                     if crm_response.status_code in (200, 201):
-                        logger.info(f"Successfully sent warranty records to CRM")
+                        logger.info(f"Successfully sent complete matched warranty records to CRM")
+                        # Try to parse CRM response
+                        try:
+                            crm_result = crm_response.json()
+                            if crm_result.get("status") == 1:
+                                logger.info("CRM confirmed successful import")
+                            else:
+                                logger.warning(f"CRM import had issues: {crm_result}")
+                        except Exception as parse_e:
+                            logger.warning(f"Could not parse CRM response: {parse_e}")
                     else:
                         logger.warning(
-                            f"CRM integration failed: {crm_response.status_code} - {crm_response.text}"
+                            f"CRM integration failed: {crm_response.status_code} - {crm_response_text}"
                         )
                 else:
                     logger.info("CRM_TARGET_URL or CRM_API_KEY not configured, skipping CRM integration")

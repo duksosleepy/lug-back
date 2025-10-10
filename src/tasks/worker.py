@@ -45,7 +45,7 @@ celery_app.conf.update(
         },
         "crm-data-sync": {
             "task": "src.crm.tasks.sync_crm_data",
-            "schedule": crontab(hour=8, minute=30),  # Run at 8:30 AM daily
+            "schedule": crontab(hour=10, minute=55),  # Run at 8:30 AM daily
             "args": (),
         },
     },
@@ -312,9 +312,13 @@ def daily_sapo_sync(self):
             try:
                 success = loop.run_until_complete(initialize_cancel_reasons())
                 if success:
-                    logger.info("Cancel reasons initialized successfully from API")
+                    logger.info(
+                        "Cancel reasons initialized successfully from API"
+                    )
                 else:
-                    logger.warning("Cancel reasons initialized using fallback data")
+                    logger.warning(
+                        "Cancel reasons initialized using fallback data"
+                    )
             finally:
                 loop.close()
         except Exception as e:
@@ -467,50 +471,74 @@ def sync_pending_registrations(self):
                                         "ngayCT": date_str,
                                         "maCT": record.get("ma_ct", ""),
                                         "soCT": record.get("so_ct", ""),
-                                        "maBoPhan": record.get("ma_bo_phan", ""),
-                                        "maDonHang": record.get("ma_don_hang", ""),
+                                        "maBoPhan": record.get(
+                                            "ma_bo_phan", ""
+                                        ),
+                                        "maDonHang": record.get(
+                                            "ma_don_hang", ""
+                                        ),
                                         "tenKhachHang": customer_name,
                                         "soDienThoai": formatted_phone,
-                                        "tinhThanh": record.get("tinh_thanh", ""),
-                                        "quanHuyen": record.get("quan_huyen", ""),
+                                        "tinhThanh": record.get(
+                                            "tinh_thanh", ""
+                                        ),
+                                        "quanHuyen": record.get(
+                                            "quan_huyen", ""
+                                        ),
                                         "phuongXa": record.get("phuong_xa", ""),
                                         "diaChi": record.get("dia_chi", ""),
                                     },
-                                    "detail": [{
-                                        "maHang": record.get("ma_hang", ""),
-                                        "tenHang": record.get("ten_hang", ""),
-                                        "imei": record.get("imei", ""),
-                                        "soLuong": record.get("so_luong", 1),
-                                        "doanhThu": record.get("doanh_thu", 0),
-                                    }]
+                                    "detail": [
+                                        {
+                                            "maHang": record.get("ma_hang", ""),
+                                            "tenHang": record.get(
+                                                "ten_hang", ""
+                                            ),
+                                            "imei": record.get("imei", ""),
+                                            "soLuong": record.get(
+                                                "so_luong", 1
+                                            ),
+                                            "doanhThu": record.get(
+                                                "doanh_thu", 0
+                                            ),
+                                        }
+                                    ],
                                 }
                                 crm_records.append(crm_record)
 
                             # Prepare CRM payload (same format as server.py)
                             crm_payload = {
                                 "apikey": crm_api_key,
-                                "data": crm_records
+                                "data": crm_records,
                             }
 
-                            logger.info(f"Sending {len(crm_records)} reverse match warranty records to CRM: {crm_target_url}")
+                            logger.info(
+                                f"Sending {len(crm_records)} reverse match warranty records to CRM: {crm_target_url}"
+                            )
                             crm_response = client.post(
                                 crm_target_url,
                                 headers={"Content-Type": "application/json"},
                                 json=crm_payload,
-                                timeout=30.0
+                                timeout=30.0,
                             )
 
                             if crm_response.status_code in (200, 201):
-                                logger.info(f"Successfully sent reverse match warranty records to CRM")
+                                logger.info(
+                                    "Successfully sent reverse match warranty records to CRM"
+                                )
                             else:
                                 logger.warning(
                                     f"CRM integration failed for reverse match: {crm_response.status_code} - {crm_response.text}"
                                 )
                         else:
-                            logger.info("CRM_TARGET_URL or CRM_API_KEY not configured, skipping CRM integration for reverse match")
+                            logger.info(
+                                "CRM_TARGET_URL or CRM_API_KEY not configured, skipping CRM integration for reverse match"
+                            )
                     except Exception as crm_e:
                         # CRM integration failure should not affect warranty registration
-                        logger.error(f"CRM integration error for reverse match (non-blocking): {str(crm_e)}")
+                        logger.error(
+                            f"CRM integration error for reverse match (non-blocking): {str(crm_e)}"
+                        )
                         # Continue with warranty process even if CRM fails
 
                     # 6. Xóa bản ghi gốc từ bảng chính
