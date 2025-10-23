@@ -2,5 +2,5 @@
     "debug.javascript.defaultRuntimeExecutable": {
         "pwa-node": "/home/duk/.local/share/mise/shims/node"
     },
-    "python.defaultInterpreterPath": "/home/duk/.local/share/mise/installs/python/3.13.3/bin/python"
+    "python.defaultInterpreterPath": "/home/duk/.local/share/mise/installs/python/3.12.7/bin/python"
 }
