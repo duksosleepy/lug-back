@@ -16,3 +16,6 @@ uv run celery -A src.tasks.worker:celery_app beat --loglevel=info
 ```bash
 uv run celery -A src.tasks.worker:celery_app inspect scheduled
 ```
+
+uv run celery -A src.tasks.worker:celery_app inspect scheduled
+uv run celery -A src.tasks.worker:celery_app inspect active
