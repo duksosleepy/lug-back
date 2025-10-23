@@ -408,9 +408,13 @@ def extract_distributed_discount_amount(order):
         total_distributed_discount = 0
         for line_item in line_items:
             if isinstance(line_item, dict):
-                distributed_discount = line_item.get("distributed_discount_amount", 0)
+                distributed_discount = line_item.get(
+                    "distributed_discount_amount", 0
+                )
                 if distributed_discount is not None:
-                    total_distributed_discount += int(round(float(distributed_discount)))
+                    total_distributed_discount += int(
+                        round(float(distributed_discount))
+                    )
 
         return total_distributed_discount
 
@@ -556,7 +560,9 @@ def process_page_data(
 
         # Extract delivery fee from order
         delivery_fee = 0
-        if order.get("delivery_fee") and isinstance(order.get("delivery_fee"), dict):
+        if order.get("delivery_fee") and isinstance(
+            order.get("delivery_fee"), dict
+        ):
             delivery_fee = order.get("delivery_fee", {}).get("fee", 0) or 0
 
         # Extract prepayment amount - only customer_prepaid source
@@ -605,7 +611,10 @@ def process_page_data(
                     ("Tổng tiền hàng", ""),
                     ("CK đơn hàng(VNĐ)", ck_don_hang),
                     ("Phí vận chuyển", delivery_fee),
-                    ("Khách phải trả", order.get("total", 0) or 0),  # Use order.total as requested
+                    (
+                        "Khách phải trả",
+                        order.get("total", 0) or 0,
+                    ),  # Use order.total as requested
                     ("Khách đã trả", khach_da_tra),
                     ("Ghi chú đơn", order.get("note", "")),
                     (
@@ -664,7 +673,10 @@ def process_page_data(
                         ("Tổng tiền hàng", line_item.get("line_amount", "")),
                         ("CK đơn hàng(VNĐ)", ck_don_hang),
                         ("Phí vận chuyển", delivery_fee),
-                        ("Khách phải trả", order.get("total", 0) or 0),  # Use order.total as requested
+                        (
+                            "Khách phải trả",
+                            order.get("total", 0) or 0,
+                        ),  # Use order.total as requested
                         ("Khách đã trả", khach_da_tra),
                         ("Ghi chú đơn", order.get("note", "")),
                         (
