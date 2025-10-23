@@ -72,6 +72,7 @@ FILTER_RULES = {
                     "TUI GIAY LON",
                     "BAOTRUMNILON_20",
                     "PBH_VANG",
+                    "TUIGIAY_25X10X34",
                 ],
             },
             {
@@ -140,6 +141,7 @@ FILTER_RULES = {
                     "TUI GIAY LON",
                     "BAOTRUMNILON_20",
                     "PBH_VANG",
+                    "TUIGIAY_25X10X34",
                 ],
             },
             {
@@ -206,8 +208,8 @@ def fetch_data(token: str, is_online: bool, limit: int = 50) -> List[Dict]:
     current_day_midnight = task_runtime.replace(
         hour=0, minute=0, second=0, microsecond=0
     )
-    target_day_start = current_day_midnight - timedelta(days=2)
-    target_day_end = current_day_midnight - timedelta(days=1)
+    target_day_start = current_day_midnight - timedelta(days=3)
+    target_day_end = current_day_midnight - timedelta(days=2)
 
     # Format dates for API query: >= 5 days ago 00:00:00, < 4 days ago 00:00:00
     date_gte = target_day_start.strftime("%Y-%m-%dT00:00:00")
@@ -1024,8 +1026,8 @@ def send_completion_email(
         current_day_midnight = task_runtime.replace(
             hour=0, minute=0, second=0, microsecond=0
         )
-        target_day_start = current_day_midnight - timedelta(days=2)
-        target_day_end = current_day_midnight - timedelta(days=1)
+        target_day_start = current_day_midnight - timedelta(days=3)
+        target_day_end = current_day_midnight - timedelta(days=2)
 
         body = f"""
         Xử lý dữ liệu CRM thành công.
