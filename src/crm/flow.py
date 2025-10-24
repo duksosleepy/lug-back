@@ -1027,12 +1027,11 @@ def send_completion_email(
             hour=0, minute=0, second=0, microsecond=0
         )
         target_day_start = current_day_midnight - timedelta(days=3)
-        target_day_end = current_day_midnight - timedelta(days=2)
 
         body = f"""
         Xử lý dữ liệu CRM thành công.
 
-        Khoảng thời gian: {target_day_start.strftime("%Y-%m-%d")} đến {target_day_end.strftime("%Y-%m-%d")}
+        Khoảng thời gian: {target_day_start.strftime("%Y-%m-%d")}
 
         Tóm tắt:
         - Dữ liệu online: {len(filtered_online_data)} bản ghi
