@@ -47,9 +47,13 @@ class AppSettings(BaseSettings):
 
         # Product mapping file path
         self.product_mapping_file = self.get_env(
-            "PRODUCT_MAPPING_FILE", 
+            "PRODUCT_MAPPING_FILE",
             "src/crm/warranty_rule.xlsx"
         )
+
+        # CRM Batch Service Fallback Ports
+        # For cluster environments where the port may change
+        self.crm_batch_fallback_ports = self._parse_crm_batch_fallback_ports()
 
     def _parse_cors_origins(self) -> List[str]:
         """
@@ -101,3 +105,31 @@ class AppSettings(BaseSettings):
 
         # Nếu không cấu hình riêng, bổ sung thêm email vào danh sách thông thường
         return self.error_notification_emails + ["kiet.huynh@sangtam.com"]
+
+    def _parse_crm_batch_fallback_ports(self) -> List[int]:
+        """
+        Phân tích danh sách cổng fallback cho CRM batch service từ biến môi trường.
+
+        Format: "8080,28080,18080" (comma-separated)
+
+        Returns:
+            List[int]: Danh sách các cổng fallback, mặc định [8080, 28080, 18080]
+        """
+        ports_str = self.get_env("CRM_BATCH_FALLBACK_PORTS", "8080,28080,18080")
+        try:
+            return [int(port.strip()) for port in ports_str.split(",")]
+        except (ValueError, AttributeError):
+            logger.warning(
+                f"Invalid CRM_BATCH_FALLBACK_PORTS format: {ports_str}. "
+                "Using default: [8080, 28080, 18080]"
+            )
+            return [8080, 28080, 18080]
+
+    def get_crm_batch_fallback_ports(self) -> List[int]:
+        """
+        Lấy danh sách cổng fallback cho CRM batch service.
+
+        Returns:
+            List[int]: Danh sách các cổng fallback
+        """
+        return self.crm_batch_fallback_ports
