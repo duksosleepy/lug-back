@@ -522,7 +522,7 @@ async def send_kl_records_to_api(kl_records: List[Dict]) -> Dict:
 
 
 def submit_batch(batch_data: List[Dict]) -> Dict:
-    """Submit the transformed data to the batch service in smaller chunks with port fallback"""
+    """Submit the transformed data to the batch service in smaller chunks"""
     if not batch_data:
         logger.warning("No data to submit after filtering")
         return {
@@ -544,35 +544,20 @@ def submit_batch(batch_data: List[Dict]) -> Dict:
         )
 
         try:
-            # Use the new port fallback mechanism
-            from src.util.http_utils import post_json_data_sync_with_port_fallback
-
             headers = {
                 "Accept": "application/json",
                 "Content-Type": "application/json",
             }
-
-            # Submit batch using port fallback mechanism
-            response = post_json_data_sync_with_port_fallback(
-                endpoint=BATCH_URL,
-                data=chunk,
+            with httpx.Client(
                 timeout=BATCH_TIMEOUT
-            )
-
-            # Check if the request was successful
-            if response.get("status") == "error":
-                logger.error(
-                    f"Failed to submit batch chunk {chunk_number}/{total_chunks}: "
-                    f"{response.get('message')}"
+            ) as client:  # Use configurable timeout
+                response = client.post(BATCH_URL, headers=headers, json=chunk)
+                response.raise_for_status()
+                results.append(response.json())
+                logger.info(
+                    f"Successfully submitted chunk {chunk_number}/{total_chunks}"
                 )
-                raise httpx.HTTPError(response.get("message"))
-
-            results.append(response)
-            logger.info(
-                f"Successfully submitted chunk {chunk_number}/{total_chunks}"
-            )
-
-        except Exception as e:
+        except httpx.HTTPError as e:
             logger.error(
                 f"Failed to submit batch chunk {chunk_number}/{total_chunks}: {e}"
             )
