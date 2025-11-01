@@ -553,10 +553,15 @@ def submit_batch(batch_data: List[Dict]) -> Dict:
             ) as client:  # Use configurable timeout
                 response = client.post(BATCH_URL, headers=headers, json=chunk)
                 response.raise_for_status()
-                results.append(response.json())
+                response_data = response.json()
+                results.append(response_data)
                 logger.info(
                     f"Successfully submitted chunk {chunk_number}/{total_chunks}"
                 )
+
+                # Log detailed response information
+                _log_batch_response(response_data, chunk_number)
+
         except httpx.HTTPError as e:
             logger.error(
                 f"Failed to submit batch chunk {chunk_number}/{total_chunks}: {e}"
@@ -568,6 +573,69 @@ def submit_batch(batch_data: List[Dict]) -> Dict:
         "message": f"Successfully submitted {len(batch_data)} requests in {len(results)} chunks",
         "results": results,
     }
+
+
+def _log_batch_response(response_data: Dict, chunk_number: int) -> None:
+    """Parse and log detailed batch submission response including errors.
+
+    Args:
+        response_data: The response from the batch submission API
+        chunk_number: The chunk number being processed
+    """
+    try:
+        # Log basic response information
+        message = response_data.get("message", "")
+        task_ids = response_data.get("task_ids", [])
+        info = response_data.get("info", "")
+        errors = response_data.get("errors", [])
+
+        logger.info(
+            f"Chunk {chunk_number} - Response message: {message}"
+        )
+        logger.info(
+            f"Chunk {chunk_number} - Successfully submitted task IDs: {len(task_ids)} tasks"
+        )
+
+        if info:
+            logger.info(f"Chunk {chunk_number} - Info: {info}")
+
+        # Log error details if any
+        if errors:
+            logger.warning(
+                f"Chunk {chunk_number} - Found {len(errors)} error(s) in batch submission"
+            )
+
+            for idx, error in enumerate(errors, 1):
+                task_id = error.get("task_id", "Unknown")
+                error_msg = error.get("error", "Unknown error")
+                status_code = error.get("status_code", "Unknown")
+                response_data_error = error.get("response_data", {})
+
+                # Extract specific error code if available
+                error_code = response_data_error.get("errorCode", "")
+
+                logger.error(
+                    f"Chunk {chunk_number} - Error {idx}/{len(errors)}: "
+                    f"Task ID: {task_id}, Status Code: {status_code}, "
+                    f"Error: {error_msg}"
+                )
+
+                if error_code:
+                    logger.error(
+                        f"Chunk {chunk_number} - Error Code: {error_code}"
+                    )
+
+                if response_data_error:
+                    logger.error(
+                        f"Chunk {chunk_number} - Response Data: {json.dumps(response_data_error, ensure_ascii=False)}"
+                    )
+        else:
+            logger.info(f"Chunk {chunk_number} - No errors in batch submission")
+
+    except Exception as e:
+        logger.warning(
+            f"Error while logging batch response details for chunk {chunk_number}: {e}"
+        )
 
 
 def process_data():
