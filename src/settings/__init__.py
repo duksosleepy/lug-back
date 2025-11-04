@@ -5,10 +5,13 @@ Sử dụng lớp Settings từ các module tương ứng để truy cập cấu
 
 # Import các class settings
 # Import các lớp settings
+import logging
 from pathlib import Path
 
 # Nạp dotenv ngay từ đầu
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 from .app import AppSettings
 from .email import EmailSettings
@@ -46,7 +49,13 @@ def get_app_settings():
 def get_email_settings():
     global _email_settings
     if _email_settings is None:
-        _email_settings = EmailSettings()
+        try:
+            _email_settings = EmailSettings()
+        except ValueError as e:
+            logger.warning(
+                f"Email settings initialization failed: {e}. Email functionality will be unavailable."
+            )
+            _email_settings = None
     return _email_settings
 
 

@@ -208,8 +208,8 @@ def fetch_data(token: str, is_online: bool, limit: int = 50) -> List[Dict]:
     current_day_midnight = task_runtime.replace(
         hour=0, minute=0, second=0, microsecond=0
     )
-    target_day_start = current_day_midnight - timedelta(days=3)
-    target_day_end = current_day_midnight - timedelta(days=2)
+    target_day_start = current_day_midnight - timedelta(days=7)
+    target_day_end = current_day_midnight - timedelta(days=3)
 
     # Format dates for API query: >= 5 days ago 00:00:00, < 4 days ago 00:00:00
     date_gte = target_day_start.strftime("%Y-%m-%dT00:00:00")
@@ -589,9 +589,7 @@ def _log_batch_response(response_data: Dict, chunk_number: int) -> None:
         info = response_data.get("info", "")
         errors = response_data.get("errors", [])
 
-        logger.info(
-            f"Chunk {chunk_number} - Response message: {message}"
-        )
+        logger.info(f"Chunk {chunk_number} - Response message: {message}")
         logger.info(
             f"Chunk {chunk_number} - Successfully submitted task IDs: {len(task_ids)} tasks"
         )
