@@ -170,15 +170,7 @@ class DaskExcelProcessor:
                 format_phone_number
             )
 
-        # Đã loại bỏ việc ghi đè cột "Mã đơn hàng" từ công thức
-        # df_processed["Mã đơn hàng"] = df_processed.apply(
-        #     lambda row: "".join(
-        #         str(row[col]) if pd.notna(row[col]) else ""
-        #         for col in ["Ngày Ct", "Mã Ct", "Số Ct", "Mã bộ phận"]
-        #     ),
-        #     axis=1,
-        # )
-
+        # Preserve existing Mã đơn hàng value from source file
         df_processed["Doanh thu"] = df_processed["Doanh thu"].fillna(0)
         final_df = pd.DataFrame(columns=self._headers)
         for col in self._headers:
