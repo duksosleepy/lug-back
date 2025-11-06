@@ -200,6 +200,7 @@ class DaskExcelProcessor:
 
     @staticmethod
     def create_order_id(row: pd.Series) -> str:
+        """Create Mã đơn hàng by combining Ngày Ct / Mã Ct / Số Ct / Mã bộ phận"""
         return "/".join(
             str(row[col]) if pd.notna(row[col]) else ""
             for col in ["Ngày Ct", "Mã Ct", "Số Ct", "Mã bộ phận"]
