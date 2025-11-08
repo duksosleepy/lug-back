@@ -200,11 +200,30 @@ class DaskExcelProcessor:
 
     @staticmethod
     def create_order_id(row: pd.Series) -> str:
-        """Create Mã đơn hàng by combining Ngày Ct / Mã Ct / Số Ct / Mã bộ phận"""
-        return "/".join(
-            str(row[col]) if pd.notna(row[col]) else ""
-            for col in ["Ngày Ct", "Mã Ct", "Số Ct", "Mã bộ phận"]
-        )
+        """Create Mã đơn hàng by combining Mã Ct / Mã bộ phận / Ngày Ct (yyyymmdd) / Số Ct"""
+        # Convert date from dd/mm/yyyy to yyyymmdd format
+        ngay_ct_formatted = ""
+        if pd.notna(row["Ngày Ct"]):
+            ngay_ct = row["Ngày Ct"]
+            try:
+                # Handle both string and datetime formats
+                if isinstance(ngay_ct, str):
+                    date_parts = ngay_ct.split("/")
+                    if len(date_parts) == 3:
+                        day, month, year = date_parts
+                        ngay_ct_formatted = f"{year}{month}{day}"
+                else:
+                    # If it's a datetime object, format it
+                    ngay_ct_formatted = pd.to_datetime(ngay_ct).strftime("%Y%m%d")
+            except Exception:
+                ngay_ct_formatted = ""
+
+        # Build order ID with components: Mã Ct / Mã bộ phận / Ngày Ct (yyyymmdd) / Số Ct
+        ma_ct = str(row["Mã Ct"]) if pd.notna(row["Mã Ct"]) else ""
+        ma_bo_phan = str(row["Mã bộ phận"]) if pd.notna(row["Mã bộ phận"]) else ""
+        so_ct = str(row["Số Ct"]) if pd.notna(row["Số Ct"]) else ""
+
+        return f"{ma_ct}/{ma_bo_phan}/{ngay_ct_formatted}/{so_ct}"
 
     # Hàm xử lý chung, với tùy chọn format_phone:
     def _process_final(
