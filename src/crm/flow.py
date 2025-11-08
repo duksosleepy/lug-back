@@ -208,8 +208,8 @@ def fetch_data(token: str, is_online: bool, limit: int = 50) -> List[Dict]:
     current_day_midnight = task_runtime.replace(
         hour=0, minute=0, second=0, microsecond=0
     )
-    target_day_start = current_day_midnight - timedelta(days=4)
-    target_day_end = current_day_midnight - timedelta(days=3)
+    target_day_start = current_day_midnight - timedelta(days=5)
+    target_day_end = current_day_midnight - timedelta(days=2)
 
     # Format dates for API query: >= 5 days ago 00:00:00, < 4 days ago 00:00:00
     date_gte = target_day_start.strftime("%Y-%m-%dT00:00:00")
@@ -1070,7 +1070,7 @@ def send_completion_email(
     try:
         # Generate timestamp for filenames
         task_runtime = datetime.now()
-        previous_day_same_time = task_runtime - timedelta(days=1)
+        previous_day_same_time = task_runtime - timedelta(days=2)
 
         # Format date for filename: YYYYMMDD (use previous day as reference)
         date_str = previous_day_same_time.strftime("%Y%m%d")

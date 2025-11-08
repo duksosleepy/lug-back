@@ -33,24 +33,11 @@ AUTH_CREDENTIALS = {
 
 # IMEI list for filtering
 IMEI_LIST = [
-    "DBLABE20142307000281",
-    "DDLCOU31052506000306",
-    "DDLLST30082507000623",
-    "DDLLST30082507000823",
-    "DDLLST21172507000082",
-    "DDLECH30192312000035",
-    "DBLSBP50272305000451",
-    "DBLSBP90082305000366",
-    "DDLNAT20772305000034",
-    "DDLLST21232409000329",
-    "DDLABE21522501000088",
-    "DDLHOL30152508000293",
-    "DDLLST10082510000216",
-    "DDLLST20392510000017",
-    "DDLLST20392510000113",
-    "DDLLST20392510000209",
-    "DBLKHA50282504000001",
-    "DBLNAU99992305002055",
+    "DDLLST30082510000272",
+    "DDLLST60292501000394",
+    "DDLECH21522310000352",
+    "DDLHOL30082509000017",
+    "DDLNAT21722408000216",
 ]
 
 # Field mapping
@@ -477,14 +464,20 @@ def submit_batch(batch_data: List[Dict]) -> Dict:
                         f"\n[SUBMIT] Request {idx}/{len(batch_data)}: Submitting {len(records)} record(s) with IMEI: {records[0]['detail'][0]['imei'] if records and records[0].get('detail') else 'N/A'}"
                     )
 
-                    response = client.post(IMPORT_URL, headers=headers, json=payload)
+                    response = client.post(
+                        IMPORT_URL, headers=headers, json=payload
+                    )
                     response.raise_for_status()
                     response_data = response.json()
 
                     print(f"[SUBMIT] Request {idx} - SUCCESS")
                     successful_submissions += 1
                     submission_results.append(
-                        {"request": idx, "status": "success", "response": response_data}
+                        {
+                            "request": idx,
+                            "status": "success",
+                            "response": response_data,
+                        }
                     )
 
                 except httpx.HTTPError as e:
@@ -517,7 +510,9 @@ def submit_batch(batch_data: List[Dict]) -> Dict:
                                     "error": error_code,
                                 }
                             )
-                            print(f"[SUBMIT] Request {idx} - Error: {error_code}")
+                            print(
+                                f"[SUBMIT] Request {idx} - Error: {error_code}"
+                            )
                     except:
                         failed_submissions += 1
                         submission_results.append(
