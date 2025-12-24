@@ -73,6 +73,8 @@ FILTER_RULES = {
                     "BAOTRUMNILON_20",
                     "PBH_VANG",
                     "TUIGIAY_25X10X34",
+                    "TUIGIAY",
+                    "TUINILON",
                 ],
             },
             {

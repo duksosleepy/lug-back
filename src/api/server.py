@@ -810,21 +810,25 @@ async def submit_warranty(request: WarrantyRequest):
 
                 if crm_target_url and crm_api_key:
                     # Chuẩn bị dữ liệu CRM từ complete matched records từ 127.0.0.1:8081
-                    crm_records = []
+                    # Group all products under ONE master record for the order
 
-                    # Use original records from search response (complete records from 127.0.0.1:8081)
+                    # Use first record for master data (all records have same order info)
+                    first_record = records[0]
+
+                    # Extract date part only from datetime string (YYYY-MM-DD)
+                    date_str = first_record.get("ngay_ct", "")
+                    if date_str and len(date_str) >= 10:
+                        date_str = date_str[:10]
+
+                    # Handle null/empty values - use None instead of defaults to match CRM example
+                    tinh_thanh = first_record.get("tinh_thanh") or None
+                    quan_huyen = first_record.get("quan_huyen") or None
+                    phuong_xa = first_record.get("phuong_xa") or None
+                    dia_chi = first_record.get("dia_chi") or None
+
+                    # Build detail array with all products
+                    detail_items = []
                     for record in records:
-                        # Extract date part only from datetime string (YYYY-MM-DD)
-                        date_str = record.get("ngay_ct", "")
-                        if date_str and len(date_str) >= 10:
-                            date_str = date_str[:10]
-
-                        # Handle null/empty values with defaults to pass CRM validation
-                        tinh_thanh = record.get("tinh_thanh") or "TP. HỒ CHÍ MINH"  # Default province
-                        quan_huyen = record.get("quan_huyen") or "Quận 1"  # Default district
-                        phuong_xa = record.get("phuong_xa") or "Phường 1"  # Default ward
-                        dia_chi = record.get("dia_chi") or "Địa chỉ không xác định"  # Default address
-
                         # Ensure numeric fields are properly formatted
                         so_luong = record.get("so_luong", "1")
                         try:
@@ -838,43 +842,43 @@ async def submit_warranty(request: WarrantyRequest):
                         except (ValueError, TypeError):
                             doanh_thu = 0
 
-                        crm_record = {
-                            "master": {
-                                "ngayCT": date_str,
-                                "maCT": record.get("ma_ct", ""),
-                                "soCT": record.get("so_ct", "").zfill(4) if record.get("so_ct") else "0001",  # Zero-pad to 4 digits
-                                "maBoPhan": record.get("ma_bo_phan", ""),
-                                "maDonHang": record.get("ma_don_hang", ""),
-                                "tenKhachHang": request.name,  # Use registered name from warranty form
-                                "soDienThoai": formatted_phone,  # Use registered phone from warranty form
-                                "tinhThanh": tinh_thanh,
-                                "quanHuyen": quan_huyen,
-                                "phuongXa": phuong_xa,
-                                "diaChi": dia_chi,
-                            },
-                            "detail": [
-                                {
-                                    "maHang": record.get("ma_hang", ""),
-                                    "tenHang": record.get("ten_hang", ""),
-                                    "imei": record.get("imei", ""),
-                                    "soLuong": so_luong,
-                                    "doanhThu": doanh_thu,
-                                }
-                            ],
+                        detail_item = {
+                            "maHang": record.get("ma_hang", ""),
+                            "tenHang": record.get("ten_hang", ""),
+                            "imei": record.get("imei", ""),
+                            "soLuong": so_luong,
+                            "doanhThu": doanh_thu,
                         }
-                        crm_records.append(crm_record)
+                        detail_items.append(detail_item)
 
-                    # Prepare CRM payload with complete matched records
-                    crm_payload = {
-                        "apikey": crm_api_key,
-                        "data": crm_records
+                    # Create single CRM record with all products in detail array
+                    crm_record = {
+                        "master": {
+                            "ngayCT": date_str,
+                            "maCT": first_record.get("ma_ct", ""),
+                            "soCT": first_record.get("so_ct", "").zfill(4) if first_record.get("so_ct") else "0001",  # Zero-pad to 4 digits
+                            "maBoPhan": first_record.get("ma_bo_phan", ""),
+                            "maDonHang": first_record.get("ma_don_hang", ""),
+                            "tenKhachHang": request.name,  # Use registered name from warranty form
+                            "soDienThoai": formatted_phone,  # Use registered phone from warranty form
+                            "tinhThanh": tinh_thanh,
+                            "quanHuyen": quan_huyen,
+                            "phuongXa": phuong_xa,
+                            "diaChi": dia_chi,
+                        },
+                        "detail": detail_items,
                     }
 
-                    logger.info(f"Sending {len(crm_records)} complete matched records from 127.0.0.1:8081 to CRM: {crm_target_url}")
+                    # Prepare CRM payload with single record containing all products
+                    crm_payload = {
+                        "apikey": crm_api_key,
+                        "data": [crm_record]  # Single record with all products
+                    }
 
-                    # Debug: Log the first record being sent to CRM
-                    if crm_records:
-                        logger.info(f"Sample CRM record: {json.dumps(crm_records[0], ensure_ascii=False, indent=2)}")
+                    logger.info(f"Sending 1 order with {len(detail_items)} product(s) to CRM: {crm_target_url}")
+
+                    # Debug: Log the CRM record being sent
+                    logger.info(f"CRM record: {json.dumps(crm_record, ensure_ascii=False, indent=2)}")
 
                     crm_response = await client.post(
                         crm_target_url,
@@ -888,7 +892,7 @@ async def submit_warranty(request: WarrantyRequest):
                     logger.info(f"CRM Response Body: {crm_response_text}")
 
                     if crm_response.status_code in (200, 201):
-                        logger.info(f"Successfully sent complete matched warranty records to CRM")
+                        logger.info(f"Successfully sent warranty order to CRM")
                         # Try to parse CRM response
                         try:
                             crm_result = crm_response.json()
@@ -906,7 +910,7 @@ async def submit_warranty(request: WarrantyRequest):
                     logger.info("CRM_TARGET_URL or CRM_API_KEY not configured, skipping CRM integration")
             except Exception as crm_e:
                 # CRM integration failure should not affect warranty registration
-                logger.error(f"CRM integration error (non-blocking): {str(crm_e)}")
+                logger.error(f"CRM integration error (non-blocking): {str(crm_e)}", exc_info=True)
                 # Continue with warranty process even if CRM fails
 
             # Bước 4: Xóa bản ghi gốc
