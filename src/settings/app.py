@@ -51,6 +51,18 @@ class AppSettings(BaseSettings):
             "src/crm/warranty_rule.xlsx"
         )
 
+        # Apprise configuration URL for email notifications
+        self.apprise_config_url = self.get_env(
+            "APPRISE_CONFIG_URL",
+            "http://172.14.0.12:8181/get/apprise"
+        )
+
+        # Apprise email tag for warranty notifications
+        self.apprise_warranty_email_tag = self.get_env(
+            "APPRISE_WARRANTY_EMAIL_TAG",
+            "email-2"
+        )
+
         # CRM Batch Service Fallback Ports
         # For cluster environments where the port may change
         self.crm_batch_fallback_ports = self._parse_crm_batch_fallback_ports()

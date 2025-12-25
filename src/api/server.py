@@ -18,6 +18,7 @@ from src.accounting.api import router as accounting_router
 from src.sapo_sync import SapoSyncRequest, sync_mysapo, sync_mysapogo
 from src.settings import app_settings
 from src.util import validate_excel_file
+from src.util.apprise_notification import send_warranty_match_email
 from src.util.logging import setup_logging
 from src.util.logging.middleware import setup_fastapi_logging
 
@@ -912,6 +913,19 @@ async def submit_warranty(request: WarrantyRequest):
                 # CRM integration failure should not affect warranty registration
                 logger.error(f"CRM integration error (non-blocking): {str(crm_e)}", exc_info=True)
                 # Continue with warranty process even if CRM fails
+
+            # Bước 3.2: Send matched customer data via email using Apprise
+            try:
+                logger.info("Sending matched warranty data via email using Apprise")
+                email_sent = send_warranty_match_email(records_to_copy)
+                if email_sent:
+                    logger.info("Successfully sent matched warranty data via email")
+                else:
+                    logger.warning("Failed to send matched warranty data via email")
+            except Exception as email_e:
+                # Email notification failure should not affect warranty registration
+                logger.error(f"Email notification error (non-blocking): {str(email_e)}", exc_info=True)
+                # Continue with warranty process even if email fails
 
             # Bước 4: Xóa bản ghi gốc
             delete_url = (

@@ -12,6 +12,7 @@ from loguru import logger
 # Move imports to module level
 from src.sapo_sync import SapoSyncRequest, sync_mysapo, sync_mysapogo
 from src.settings import app_settings
+from src.util.apprise_notification import send_warranty_match_email
 from src.util.phone_utils import format_phone_number
 
 # === PHẦN 1: KHỞI TẠO CELERY APP ===
@@ -540,6 +541,19 @@ def sync_pending_registrations(self):
                             f"CRM integration error for reverse match (non-blocking): {str(crm_e)}"
                         )
                         # Continue with warranty process even if CRM fails
+
+                    # 5.2. Send matched customer data via email using Apprise
+                    try:
+                        logger.info("Sending reverse match warranty data via email using Apprise")
+                        email_sent = send_warranty_match_email(records_to_copy)
+                        if email_sent:
+                            logger.info("Successfully sent reverse match warranty data via email")
+                        else:
+                            logger.warning("Failed to send reverse match warranty data via email")
+                    except Exception as email_e:
+                        # Email notification failure should not affect warranty registration
+                        logger.error(f"Email notification error for reverse match (non-blocking): {str(email_e)}", exc_info=True)
+                        # Continue with warranty process even if email fails
 
                     # 6. Xóa bản ghi gốc từ bảng chính
                     delete_original_records(client, record_ids)
