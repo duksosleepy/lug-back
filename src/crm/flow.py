@@ -726,6 +726,19 @@ def process_data():
             f"After splitting - Online: {len(filtered_online_data)}, Offline: {len(filtered_offline_data)}"
         )
 
+        # Count special phone numbers for statistics
+        khach_le_count = sum(
+            1 for record in all_filtered_data
+            if record.get("So_Dien_Thoai") == "0912345678"
+        )
+        khach_nuoc_ngoai_count = sum(
+            1 for record in all_filtered_data
+            if record.get("So_Dien_Thoai") in ["09999999999", "090000000"]
+        )
+
+        logger.info(f"Khach le count: {khach_le_count}")
+        logger.info(f"Khach nuoc ngoai count: {khach_nuoc_ngoai_count}")
+
         # Log sample data if available for debugging
         if online_data:
             logger.info(
@@ -750,7 +763,8 @@ def process_data():
             # Step 8: Send completion email with Excel attachments
             logger.info("Sending completion email...")
             send_completion_email(
-                filtered_online_data, filtered_offline_data, negative_records
+                filtered_online_data, filtered_offline_data, negative_records,
+                khach_le_count, khach_nuoc_ngoai_count
             )
 
             return result
@@ -759,7 +773,7 @@ def process_data():
                 "No data to submit after filtering and transformation"
             )
             # Send email even if no data to submit
-            send_completion_email([], [], negative_records)
+            send_completion_email([], [], negative_records, khach_le_count, khach_nuoc_ngoai_count)
 
         # Step 10: Send KL phone records to API if any exist (common for both paths)
         kl_records = kl_online_phones + kl_offline_phones
@@ -1061,6 +1075,8 @@ def send_completion_email(
     filtered_online_data: List[Dict],
     filtered_offline_data: List[Dict],
     negative_records: List[Dict],
+    khach_le_count: int,
+    khach_nuoc_ngoai_count: int,
 ):
     """Send completion email with Excel attachments.
 
@@ -1068,6 +1084,8 @@ def send_completion_email(
         filtered_online_data: Final processed online data
         filtered_offline_data: Final processed offline data
         negative_records: Records with negative values
+        khach_le_count: Number of records with phone 0912345678
+        khach_nuoc_ngoai_count: Number of records with phone 09999999999 or 090000000
     """
     try:
         # Generate timestamp for filenames
@@ -1111,11 +1129,18 @@ def send_completion_email(
         - CRM_Offline_Data_{date_str}.xlsx: Dữ liệu offline đã lọc
         - CRM_Negative_Records_{date_str}.xlsx: Các bản ghi có giá trị âm
 
+        So luong khach le: {khach_le_count}
+        So luong Khach nuoc ngoai: {khach_nuoc_ngoai_count}
+
         Đây là email được gửi tự động.
         """
 
         result = send_notification_email(
-            to=["nam.nguyen@lug.vn", "songkhoi123@gmail.com"],
+            to=[
+                "nam.nguyen@lug.vn",
+                "songkhoi123@gmail.com",
+                "dang.le@sangtam.com",
+            ],
             subject=subject,
             body=body,
             attachment_paths=[
