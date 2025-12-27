@@ -857,7 +857,9 @@ async def submit_warranty(request: WarrantyRequest):
                         "master": {
                             "ngayCT": date_str,
                             "maCT": first_record.get("ma_ct", ""),
-                            "soCT": first_record.get("so_ct", "").zfill(4) if first_record.get("so_ct") else "0001",  # Zero-pad to 4 digits
+                            "soCT": first_record.get("so_ct", "").zfill(4)
+                            if first_record.get("so_ct")
+                            else "0001",  # Zero-pad to 4 digits
                             "maBoPhan": first_record.get("ma_bo_phan", ""),
                             "maDonHang": first_record.get("ma_don_hang", ""),
                             "tenKhachHang": request.name,  # Use registered name from warranty form
@@ -873,58 +875,82 @@ async def submit_warranty(request: WarrantyRequest):
                     # Prepare CRM payload with single record containing all products
                     crm_payload = {
                         "apikey": crm_api_key,
-                        "data": [crm_record]  # Single record with all products
+                        "data": [crm_record],  # Single record with all products
                     }
 
-                    logger.info(f"Sending 1 order with {len(detail_items)} product(s) to CRM: {crm_target_url}")
+                    logger.info(
+                        f"Sending 1 order with {len(detail_items)} product(s) to CRM: {crm_target_url}"
+                    )
 
                     # Debug: Log the CRM record being sent
-                    logger.info(f"CRM record: {json.dumps(crm_record, ensure_ascii=False, indent=2)}")
+                    logger.info(
+                        f"CRM record: {json.dumps(crm_record, ensure_ascii=False, indent=2)}"
+                    )
 
                     crm_response = await client.post(
                         crm_target_url,
                         headers={"Content-Type": "application/json"},
                         json=crm_payload,
-                        timeout=30.0  # Reasonable timeout for CRM call
+                        timeout=30.0,  # Reasonable timeout for CRM call
                     )
 
                     crm_response_text = crm_response.text
-                    logger.info(f"CRM Response Status: {crm_response.status_code}")
+                    logger.info(
+                        f"CRM Response Status: {crm_response.status_code}"
+                    )
                     logger.info(f"CRM Response Body: {crm_response_text}")
 
                     if crm_response.status_code in (200, 201):
-                        logger.info(f"Successfully sent warranty order to CRM")
+                        logger.info("Successfully sent warranty order to CRM")
                         # Try to parse CRM response
                         try:
                             crm_result = crm_response.json()
                             if crm_result.get("status") == 1:
                                 logger.info("CRM confirmed successful import")
                             else:
-                                logger.warning(f"CRM import had issues: {crm_result}")
+                                logger.warning(
+                                    f"CRM import had issues: {crm_result}"
+                                )
                         except Exception as parse_e:
-                            logger.warning(f"Could not parse CRM response: {parse_e}")
+                            logger.warning(
+                                f"Could not parse CRM response: {parse_e}"
+                            )
                     else:
                         logger.warning(
                             f"CRM integration failed: {crm_response.status_code} - {crm_response_text}"
                         )
                 else:
-                    logger.info("CRM_TARGET_URL or CRM_API_KEY not configured, skipping CRM integration")
+                    logger.info(
+                        "CRM_TARGET_URL or CRM_API_KEY not configured, skipping CRM integration"
+                    )
             except Exception as crm_e:
                 # CRM integration failure should not affect warranty registration
-                logger.error(f"CRM integration error (non-blocking): {str(crm_e)}", exc_info=True)
+                logger.error(
+                    f"CRM integration error (non-blocking): {str(crm_e)}",
+                    exc_info=True,
+                )
                 # Continue with warranty process even if CRM fails
 
             # Bước 3.2: Send matched customer data via email using Apprise
             try:
-                logger.info("Sending matched warranty data via email using Apprise")
+                logger.info(
+                    "Sending matched warranty data via email using Apprise"
+                )
                 email_sent = send_warranty_match_email(records_to_copy)
                 if email_sent:
-                    logger.info("Successfully sent matched warranty data via email")
+                    logger.info(
+                        "Successfully sent matched warranty data via email"
+                    )
                 else:
-                    logger.warning("Failed to send matched warranty data via email")
+                    logger.warning(
+                        "Failed to send matched warranty data via email"
+                    )
             except Exception as email_e:
                 # Email notification failure should not affect warranty registration
-                logger.error(f"Email notification error (non-blocking): {str(email_e)}", exc_info=True)
+                logger.error(
+                    f"Email notification error (non-blocking): {str(email_e)}",
+                    exc_info=True,
+                )
                 # Continue with warranty process even if email fails
 
             # Bước 4: Xóa bản ghi gốc

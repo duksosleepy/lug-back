@@ -726,13 +726,14 @@ def process_data():
             f"After splitting - Online: {len(filtered_online_data)}, Offline: {len(filtered_offline_data)}"
         )
 
-        # Count special phone numbers for statistics
+        # Count special phone numbers for statistics FROM RAW DATA (before filtering)
+        # These phone numbers are excluded by filters, so we need to count them before filtering
         khach_le_count = sum(
-            1 for record in all_filtered_data
+            1 for record in all_data
             if record.get("So_Dien_Thoai") == "0912345678"
         )
         khach_nuoc_ngoai_count = sum(
-            1 for record in all_filtered_data
+            1 for record in all_data
             if record.get("So_Dien_Thoai") in ["09999999999", "090000000"]
         )
 

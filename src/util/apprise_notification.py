@@ -1,6 +1,7 @@
 """
 Module for sending email notifications using Apprise
 """
+
 import tempfile
 from typing import Dict, List
 
@@ -53,7 +54,9 @@ def send_warranty_match_email(matched_records: List[Dict]) -> bool:
             )
 
             if result:
-                logger.info(f"Successfully sent warranty match email with {len(matched_records)} records")
+                logger.info(
+                    f"Successfully sent warranty match email with {len(matched_records)} records"
+                )
             else:
                 logger.error("Failed to send warranty match email via Apprise")
 
@@ -62,11 +65,14 @@ def send_warranty_match_email(matched_records: List[Dict]) -> bool:
         finally:
             # Clean up temporary file
             import os
+
             if os.path.exists(excel_file_path):
                 os.unlink(excel_file_path)
 
     except Exception as e:
-        logger.error(f"Error sending warranty match email: {str(e)}", exc_info=True)
+        logger.error(
+            f"Error sending warranty match email: {str(e)}", exc_info=True
+        )
         return False
 
 
@@ -139,9 +145,7 @@ def _create_warranty_excel(records: List[Dict]) -> str:
 
     # Create temporary file
     temp_file = tempfile.NamedTemporaryFile(
-        suffix=".xlsx",
-        delete=False,
-        prefix="warranty_match_"
+        suffix=".xlsx", delete=False, prefix="warranty_match_"
     )
     temp_file_path = temp_file.name
     temp_file.close()
