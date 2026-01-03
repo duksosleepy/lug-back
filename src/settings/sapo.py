@@ -26,7 +26,7 @@ class SapoSettings(BaseSettings):
         # Google Sheets
         self.spreadsheet_id = self.get_env(
             "SAPO_SPREADSHEET_ID",
-            "1WyN3PA4oWkjYGBGIC8nZy65102FkCD9jmnyWna6zFr8",
+            "14ZJxOdBY7Jge5MuoevXCI02_uQx_MuM8SXKWLDvUqwQ",
         )
         self.landing_site_range = self.get_env(
             "SAPO_LANDING_SITE_RANGE", "Landing site!D2:AX"
