@@ -726,15 +726,16 @@ def process_data():
             f"After splitting - Online: {len(filtered_online_data)}, Offline: {len(filtered_offline_data)}"
         )
 
-        # Count special phone numbers for statistics FROM RAW DATA (before filtering)
-        # These phone numbers are excluded by filters, so we need to count them before filtering
-        khach_le_count = sum(
-            1 for record in all_data
-            if record.get("So_Dien_Thoai") == "0912345678"
-        )
+        # Count special phone numbers for statistics FROM FILTERED DATA (after filtering)
+        # Count Khach le from the KL phone records that were filtered out
+        khach_le_count = len(kl_online_phones) + len(kl_offline_phones)
+
+        # Count Khach nuoc ngoai from the final filtered data
+        all_final_filtered_data = filtered_online_data + filtered_offline_data
         khach_nuoc_ngoai_count = sum(
-            1 for record in all_data
-            if record.get("So_Dien_Thoai") in ["09999999999", "090000000"]
+            1
+            for record in all_final_filtered_data
+            if record.get("So_Dien_Thoai") in ["0999999999", "0900000000"]
         )
 
         logger.info(f"Khach le count: {khach_le_count}")
@@ -764,8 +765,11 @@ def process_data():
             # Step 8: Send completion email with Excel attachments
             logger.info("Sending completion email...")
             send_completion_email(
-                filtered_online_data, filtered_offline_data, negative_records,
-                khach_le_count, khach_nuoc_ngoai_count
+                filtered_online_data,
+                filtered_offline_data,
+                negative_records,
+                khach_le_count,
+                khach_nuoc_ngoai_count,
             )
 
             return result
@@ -774,7 +778,9 @@ def process_data():
                 "No data to submit after filtering and transformation"
             )
             # Send email even if no data to submit
-            send_completion_email([], [], negative_records, khach_le_count, khach_nuoc_ngoai_count)
+            send_completion_email(
+                [], [], negative_records, khach_le_count, khach_nuoc_ngoai_count
+            )
 
         # Step 10: Send KL phone records to API if any exist (common for both paths)
         kl_records = kl_online_phones + kl_offline_phones
