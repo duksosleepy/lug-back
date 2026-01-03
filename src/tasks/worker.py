@@ -459,63 +459,91 @@ def sync_pending_registrations(self):
                         crm_api_key = app_settings.get_env("CRM_API_KEY")
 
                         if crm_target_url and crm_api_key:
-                            # Transform records_to_copy to CRM format (same as server.py)
-                            crm_records = []
+                            # IMPORTANT: Use user's submitted data from pending registration
+                            # Log original data vs user data for debugging
+                            logger.info(f"=== REVERSE MATCH CRM INTEGRATION DEBUG ===")
+                            logger.info(f"User submitted - Name: '{customer_name}', Phone: '{formatted_phone}'")
+                            logger.info(f"Original order - Name: '{order_records[0].get('ten_khach_hang', 'N/A')}', Phone: '{order_records[0].get('so_dien_thoai', 'N/A')}'")
+
+                            # Group all products under ONE master record for the order (match server.py structure)
+                            # Use first record for master data (all records have same order info)
+                            # BUT use user's submitted name and phone from pending registration
+                            first_record = records_to_copy[0]
+
+                            # Extract date part only from datetime string (YYYY-MM-DD)
+                            date_str = first_record.get("ngay_ct", "")
+                            if date_str and len(date_str) >= 10:
+                                date_str = date_str[:10]
+
+                            # Handle null/empty values - use None instead of defaults to match CRM example
+                            tinh_thanh = first_record.get("tinh_thanh") or None
+                            quan_huyen = first_record.get("quan_huyen") or None
+                            phuong_xa = first_record.get("phuong_xa") or None
+                            dia_chi = first_record.get("dia_chi") or None
+
+                            # Build detail array with all products
+                            detail_items = []
                             for record in records_to_copy:
-                                # Extract date part only from datetime string (YYYY-MM-DD)
-                                date_str = record.get("ngay_ct", "")
-                                if date_str and len(date_str) >= 10:
-                                    date_str = date_str[:10]
+                                # Ensure numeric fields are properly formatted
+                                so_luong = record.get("so_luong", "1")
+                                try:
+                                    so_luong = int(float(so_luong)) if so_luong else 1
+                                except (ValueError, TypeError):
+                                    so_luong = 1
 
-                                crm_record = {
-                                    "master": {
-                                        "ngayCT": date_str,
-                                        "maCT": record.get("ma_ct", ""),
-                                        "soCT": record.get("so_ct", ""),
-                                        "maBoPhan": record.get(
-                                            "ma_bo_phan", ""
-                                        ),
-                                        "maDonHang": record.get(
-                                            "ma_don_hang", ""
-                                        ),
-                                        "tenKhachHang": customer_name,
-                                        "soDienThoai": formatted_phone,
-                                        "tinhThanh": record.get(
-                                            "tinh_thanh", ""
-                                        ),
-                                        "quanHuyen": record.get(
-                                            "quan_huyen", ""
-                                        ),
-                                        "phuongXa": record.get("phuong_xa", ""),
-                                        "diaChi": record.get("dia_chi", ""),
-                                    },
-                                    "detail": [
-                                        {
-                                            "maHang": record.get("ma_hang", ""),
-                                            "tenHang": record.get(
-                                                "ten_hang", ""
-                                            ),
-                                            "imei": record.get("imei", ""),
-                                            "soLuong": record.get(
-                                                "so_luong", 1
-                                            ),
-                                            "doanhThu": record.get(
-                                                "doanh_thu", 0
-                                            ),
-                                        }
-                                    ],
+                                doanh_thu = record.get("doanh_thu", "0")
+                                try:
+                                    doanh_thu = float(doanh_thu) if doanh_thu else 0
+                                except (ValueError, TypeError):
+                                    doanh_thu = 0
+
+                                detail_item = {
+                                    "maHang": record.get("ma_hang", ""),
+                                    "tenHang": record.get("ten_hang", ""),
+                                    "imei": record.get("imei", ""),
+                                    "soLuong": so_luong,
+                                    "doanhThu": doanh_thu,
                                 }
-                                crm_records.append(crm_record)
+                                detail_items.append(detail_item)
 
-                            # Prepare CRM payload (same format as server.py)
+                            # Create single CRM record with all products in detail array
+                            # CRITICAL: Must use user's submitted name and phone from pending registration
+                            crm_record = {
+                                "master": {
+                                    "ngayCT": date_str,
+                                    "maCT": first_record.get("ma_ct", ""),
+                                    "soCT": first_record.get("so_ct", "").zfill(4)
+                                    if first_record.get("so_ct")
+                                    else "0001",  # Zero-pad to 4 digits
+                                    "maBoPhan": first_record.get("ma_bo_phan", ""),
+                                    "maDonHang": first_record.get("ma_don_hang", ""),
+                                    "tenKhachHang": customer_name,  # MUST use user's submitted name from pending registration
+                                    "soDienThoai": formatted_phone,  # MUST use user's submitted phone from pending registration
+                                    "tinhThanh": tinh_thanh,
+                                    "quanHuyen": quan_huyen,
+                                    "phuongXa": phuong_xa,
+                                    "diaChi": dia_chi,
+                                },
+                                "detail": detail_items,
+                            }
+
+                            # Prepare CRM payload with single record containing all products
                             crm_payload = {
                                 "apikey": crm_api_key,
-                                "data": crm_records,
+                                "data": [crm_record],  # Single record with all products
                             }
 
                             logger.info(
-                                f"Sending {len(crm_records)} reverse match warranty records to CRM: {crm_target_url}"
+                                f"Sending 1 order with {len(detail_items)} product(s) to CRM (reverse match): {crm_target_url}"
                             )
+
+                            # Debug: Log the EXACT CRM record being sent to verify user data is used
+                            import json
+                            logger.info(f"CRM master record - tenKhachHang: '{crm_record['master']['tenKhachHang']}', soDienThoai: '{crm_record['master']['soDienThoai']}'")
+                            logger.info(
+                                f"Full CRM payload (reverse match): {json.dumps(crm_record, ensure_ascii=False, indent=2)}"
+                            )
+
                             crm_response = client.post(
                                 crm_target_url,
                                 headers={"Content-Type": "application/json"},
@@ -523,13 +551,30 @@ def sync_pending_registrations(self):
                                 timeout=30.0,
                             )
 
+                            crm_response_text = crm_response.text
+                            logger.info(
+                                f"CRM Response Status (reverse match): {crm_response.status_code}"
+                            )
+                            logger.info(f"CRM Response Body (reverse match): {crm_response_text}")
+
                             if crm_response.status_code in (200, 201):
-                                logger.info(
-                                    "Successfully sent reverse match warranty records to CRM"
-                                )
+                                logger.info("Successfully sent reverse match warranty order to CRM")
+                                # Try to parse CRM response
+                                try:
+                                    crm_result = crm_response.json()
+                                    if crm_result.get("status") == 1:
+                                        logger.info("CRM confirmed successful import (reverse match)")
+                                    else:
+                                        logger.warning(
+                                            f"CRM import had issues (reverse match): {crm_result}"
+                                        )
+                                except Exception as parse_e:
+                                    logger.warning(
+                                        f"Could not parse CRM response (reverse match): {parse_e}"
+                                    )
                             else:
                                 logger.warning(
-                                    f"CRM integration failed for reverse match: {crm_response.status_code} - {crm_response.text}"
+                                    f"CRM integration failed for reverse match: {crm_response.status_code} - {crm_response_text}"
                                 )
                         else:
                             logger.info(
@@ -538,7 +583,8 @@ def sync_pending_registrations(self):
                     except Exception as crm_e:
                         # CRM integration failure should not affect warranty registration
                         logger.error(
-                            f"CRM integration error for reverse match (non-blocking): {str(crm_e)}"
+                            f"CRM integration error for reverse match (non-blocking): {str(crm_e)}",
+                            exc_info=True,
                         )
                         # Continue with warranty process even if CRM fails
 

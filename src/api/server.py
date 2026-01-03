@@ -810,10 +810,17 @@ async def submit_warranty(request: WarrantyRequest):
                 crm_api_key = app_settings.get_env("CRM_API_KEY")
 
                 if crm_target_url and crm_api_key:
+                    # IMPORTANT: Use user's submitted data, not original order data
+                    # Log original data vs user data for debugging
+                    logger.info(f"=== WARRANTY CRM INTEGRATION DEBUG ===")
+                    logger.info(f"User submitted - Name: '{request.name}', Phone: '{formatted_phone}'")
+                    logger.info(f"Original order - Name: '{records[0].get('ten_khach_hang', 'N/A')}', Phone: '{records[0].get('so_dien_thoai', 'N/A')}'")
+
                     # Chuẩn bị dữ liệu CRM từ complete matched records từ 127.0.0.1:8081
                     # Group all products under ONE master record for the order
 
                     # Use first record for master data (all records have same order info)
+                    # BUT use user's submitted name and phone, not original data
                     first_record = records[0]
 
                     # Extract date part only from datetime string (YYYY-MM-DD)
@@ -853,6 +860,7 @@ async def submit_warranty(request: WarrantyRequest):
                         detail_items.append(detail_item)
 
                     # Create single CRM record with all products in detail array
+                    # CRITICAL: Must use user's submitted name and phone, NOT original order data
                     crm_record = {
                         "master": {
                             "ngayCT": date_str,
@@ -862,8 +870,8 @@ async def submit_warranty(request: WarrantyRequest):
                             else "0001",  # Zero-pad to 4 digits
                             "maBoPhan": first_record.get("ma_bo_phan", ""),
                             "maDonHang": first_record.get("ma_don_hang", ""),
-                            "tenKhachHang": request.name,  # Use registered name from warranty form
-                            "soDienThoai": formatted_phone,  # Use registered phone from warranty form
+                            "tenKhachHang": request.name,  # MUST use user's submitted name
+                            "soDienThoai": formatted_phone,  # MUST use user's submitted phone
                             "tinhThanh": tinh_thanh,
                             "quanHuyen": quan_huyen,
                             "phuongXa": phuong_xa,
@@ -882,9 +890,10 @@ async def submit_warranty(request: WarrantyRequest):
                         f"Sending 1 order with {len(detail_items)} product(s) to CRM: {crm_target_url}"
                     )
 
-                    # Debug: Log the CRM record being sent
+                    # Debug: Log the EXACT CRM record being sent to verify user data is used
+                    logger.info(f"CRM master record - tenKhachHang: '{crm_record['master']['tenKhachHang']}', soDienThoai: '{crm_record['master']['soDienThoai']}'")
                     logger.info(
-                        f"CRM record: {json.dumps(crm_record, ensure_ascii=False, indent=2)}"
+                        f"Full CRM payload: {json.dumps(crm_record, ensure_ascii=False, indent=2)}"
                     )
 
                     crm_response = await client.post(
