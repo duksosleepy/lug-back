@@ -810,9 +810,18 @@ async def submit_warranty(request: WarrantyRequest):
                 crm_api_key = app_settings.get_env("CRM_API_KEY")
 
                 if crm_target_url and crm_api_key:
+                    logger.info("=" * 80)
+                    logger.info("CRM INTEGRATION - START")
+                    logger.info(f"Order Code: {order_code}")
+                    logger.info(f"Customer Name (submitted): {request.name}")
+                    logger.info(f"Customer Phone (submitted): {formatted_phone}")
+                    logger.info(f"Purchase Platform: {request.purchase_platform or 'website'}")
+                    logger.info(f"Number of items in order: {len(records)}")
+                    logger.info(f"Target CRM URL: {crm_target_url}")
+                    logger.info("=" * 80)
+
                     # IMPORTANT: Use user's submitted data, not original order data
                     # Log original data vs user data for debugging
-                    logger.info(f"=== WARRANTY CRM INTEGRATION DEBUG ===")
                     logger.info(f"User submitted - Name: '{request.name}', Phone: '{formatted_phone}'")
                     logger.info(f"Original order - Name: '{records[0].get('ten_khach_hang', 'N/A')}', Phone: '{records[0].get('so_dien_thoai', 'N/A')}'")
 
@@ -886,15 +895,23 @@ async def submit_warranty(request: WarrantyRequest):
                         "data": [crm_record],  # Single record with all products
                     }
 
-                    logger.info(
-                        f"Sending 1 order with {len(detail_items)} product(s) to CRM: {crm_target_url}"
-                    )
+                    logger.info(f"Prepared CRM payload with {len(detail_items)} product(s)")
+                    logger.info(f"CRM Payload Summary:")
+                    logger.info(f"  - Order Date: {date_str}")
+                    logger.info(f"  - Document Code: {first_record.get('ma_ct', '')}")
+                    logger.info(f"  - Document Number: {first_record.get('so_ct', '').zfill(4) if first_record.get('so_ct') else '0001'}")
+                    logger.info(f"  - Department Code: {first_record.get('ma_bo_phan', '')}")
+                    logger.info(f"  - Products:")
+                    for idx, item in enumerate(detail_items, 1):
+                        logger.info(f"    {idx}. {item['tenHang']} (Code: {item['maHang']}, IMEI: {item['imei']}, Qty: {item['soLuong']}, Revenue: {item['doanhThu']})")
 
                     # Debug: Log the EXACT CRM record being sent to verify user data is used
                     logger.info(f"CRM master record - tenKhachHang: '{crm_record['master']['tenKhachHang']}', soDienThoai: '{crm_record['master']['soDienThoai']}'")
-                    logger.info(
+                    logger.debug(
                         f"Full CRM payload: {json.dumps(crm_record, ensure_ascii=False, indent=2)}"
                     )
+
+                    logger.info(f"Sending POST request to CRM: {crm_target_url}")
 
                     crm_response = await client.post(
                         crm_target_url,
@@ -904,38 +921,80 @@ async def submit_warranty(request: WarrantyRequest):
                     )
 
                     crm_response_text = crm_response.text
-                    logger.info(
-                        f"CRM Response Status: {crm_response.status_code}"
-                    )
-                    logger.info(f"CRM Response Body: {crm_response_text}")
+
+                    logger.info("-" * 80)
+                    logger.info("CRM RESPONSE RECEIVED")
+                    logger.info(f"Order Code: {order_code}")
+                    logger.info(f"HTTP Status Code: {crm_response.status_code}")
+                    logger.info(f"Response Body: {crm_response_text}")
+                    logger.info("-" * 80)
 
                     if crm_response.status_code in (200, 201):
-                        logger.info("Successfully sent warranty order to CRM")
+                        logger.info("✓ CRM Integration SUCCESS")
+                        logger.info(f"  - Order Code: {order_code}")
+                        logger.info(f"  - Customer: {request.name} ({formatted_phone})")
+                        logger.info(f"  - Products Sent: {len(detail_items)}")
+                        logger.info(f"  - HTTP Status: {crm_response.status_code}")
+
                         # Try to parse CRM response
                         try:
                             crm_result = crm_response.json()
+                            logger.info(f"  - CRM Response Data: {json.dumps(crm_result, ensure_ascii=False)}")
+
                             if crm_result.get("status") == 1:
-                                logger.info("CRM confirmed successful import")
+                                logger.info("  - CRM Status: Import confirmed successful")
                             else:
-                                logger.warning(
-                                    f"CRM import had issues: {crm_result}"
-                                )
+                                logger.warning(f"  - CRM Status: Import had issues - {crm_result}")
                         except Exception as parse_e:
-                            logger.warning(
-                                f"Could not parse CRM response: {parse_e}"
-                            )
+                            logger.warning(f"  - Could not parse CRM JSON response: {parse_e}")
+                            logger.warning(f"  - Raw response: {crm_response_text}")
+
+                        logger.info("=" * 80)
                     else:
-                        logger.warning(
-                            f"CRM integration failed: {crm_response.status_code} - {crm_response_text}"
-                        )
+                        logger.error("✗ CRM Integration FAILED")
+                        logger.error(f"  - Order Code: {order_code}")
+                        logger.error(f"  - Customer: {request.name} ({formatted_phone})")
+                        logger.error(f"  - HTTP Status: {crm_response.status_code}")
+                        logger.error(f"  - Error Response: {crm_response_text}")
+                        logger.error(f"  - CRM URL: {crm_target_url}")
+                        logger.error(f"  - Products Attempted: {len(detail_items)}")
+                        logger.error(f"  - Request Payload: {json.dumps(crm_payload, ensure_ascii=False, indent=2)}")
+                        logger.error("=" * 80)
                 else:
-                    logger.info(
-                        "CRM_TARGET_URL or CRM_API_KEY not configured, skipping CRM integration"
-                    )
+                    logger.warning("CRM Integration SKIPPED - Configuration missing")
+                    logger.warning(f"  - CRM_TARGET_URL configured: {bool(crm_target_url)}")
+                    logger.warning(f"  - CRM_API_KEY configured: {bool(crm_api_key)}")
+                    logger.warning(f"  - Order Code: {order_code}")
+            except httpx.TimeoutException as timeout_e:
+                # CRM timeout - specific error handling
+                logger.error("✗ CRM Integration TIMEOUT")
+                logger.error(f"  - Order Code: {order_code}")
+                logger.error(f"  - Customer: {request.name} ({formatted_phone})")
+                logger.error(f"  - CRM URL: {crm_target_url}")
+                logger.error(f"  - Timeout Duration: 30.0s")
+                logger.error(f"  - Error: {str(timeout_e)}")
+                logger.error("=" * 80)
+                # Continue with warranty process even if CRM times out
+            except httpx.RequestError as req_e:
+                # CRM request error (connection, DNS, etc.)
+                logger.error("✗ CRM Integration REQUEST ERROR")
+                logger.error(f"  - Order Code: {order_code}")
+                logger.error(f"  - Customer: {request.name} ({formatted_phone})")
+                logger.error(f"  - CRM URL: {crm_target_url}")
+                logger.error(f"  - Error Type: {type(req_e).__name__}")
+                logger.error(f"  - Error Details: {str(req_e)}")
+                logger.error("=" * 80)
+                # Continue with warranty process even if CRM request fails
             except Exception as crm_e:
                 # CRM integration failure should not affect warranty registration
+                logger.error("✗ CRM Integration EXCEPTION")
+                logger.error(f"  - Order Code: {order_code}")
+                logger.error(f"  - Customer: {request.name} ({formatted_phone})")
+                logger.error(f"  - Exception Type: {type(crm_e).__name__}")
+                logger.error(f"  - Exception Message: {str(crm_e)}")
+                logger.error("=" * 80)
                 logger.error(
-                    f"CRM integration error (non-blocking): {str(crm_e)}",
+                    f"Full CRM integration error traceback:",
                     exc_info=True,
                 )
                 # Continue with warranty process even if CRM fails
