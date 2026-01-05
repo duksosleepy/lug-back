@@ -756,13 +756,27 @@ def process_data():
         batch_data = transform_data(all_filtered_data)
         logger.info(f"Transformed data into {len(batch_data)} batch requests")
 
-        # Step 7: Submit batch
+        # Step 7: Send KL phone records to API if any exist (before batch submission)
+        kl_records = kl_online_phones + kl_offline_phones
+        if kl_records:
+            logger.info("Sending KL phone records to API...")
+            kl_result = asyncio.run(send_kl_records_to_api(kl_records))
+            logger.info(f"KL phone records API result: {kl_result}")
+
+        # Step 8: Send invalid phone records email if any exist (before batch submission)
+        if invalid_online_phones or invalid_offline_phones:
+            logger.info("Sending invalid phone records email...")
+            send_invalid_phone_email(
+                invalid_online_phones, invalid_offline_phones
+            )
+
+        # Step 9: Submit batch
         if batch_data:
             logger.info("Submitting batch...")
             result = submit_batch(batch_data)
             logger.info(f"Batch submission result: {result}")
 
-            # Step 8: Send completion email with Excel attachments
+            # Step 10: Send completion email with Excel attachments
             logger.info("Sending completion email...")
             send_completion_email(
                 filtered_online_data,
@@ -781,26 +795,7 @@ def process_data():
             send_completion_email(
                 [], [], negative_records, khach_le_count, khach_nuoc_ngoai_count
             )
-
-        # Step 10: Send KL phone records to API if any exist (common for both paths)
-        kl_records = kl_online_phones + kl_offline_phones
-        if kl_records:
-            logger.info("Sending KL phone records to API...")
-            kl_result = asyncio.run(send_kl_records_to_api(kl_records))
-            logger.info(f"KL phone records API result: {kl_result}")
-
-        # Step 11: Send invalid phone records email if any exist (common for both paths)
-        if invalid_online_phones or invalid_offline_phones:
-            logger.info("Sending invalid phone records email...")
-            send_invalid_phone_email(
-                invalid_online_phones, invalid_offline_phones
-            )
-
-        return (
-            result
-            if batch_data
-            else {"status": "no_data", "message": "No data to submit"}
-        )
+            return {"status": "no_data", "message": "No data to submit"}
 
     except Exception as e:
         logger.error(f"An error occurred in the data pipeline: {e}")
