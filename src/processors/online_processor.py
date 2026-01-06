@@ -182,22 +182,22 @@ class DaskExcelProcessor:
 
     def _filter_kl_records(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Lọc các bản ghi có số điện thoại là "0912345678".
+        Lọc các bản ghi có số điện thoại là "0912345678" hoặc "0999999999".
         """
         # Kiểm tra xem cột "Số điện thoại" có tồn tại không
         if "Số điện thoại" not in df.columns:
             print("CẢNH BÁO: Không tìm thấy cột 'Số điện thoại' trong dữ liệu")
             return df.iloc[0:0]  # Trả về DataFrame rỗng
 
-        # Tạo mask cho các bản ghi có số điện thoại "0912345678"
-        phone_mask = df["Số điện thoại"].astype(str).str.strip() == "0912345678"
+        # Tạo mask cho các bản ghi có số điện thoại "0912345678" hoặc "0999999999"
+        phone_mask = df["Số điện thoại"].astype(str).str.strip().isin(["0912345678", "0999999999"])
 
         # Trả về DataFrame chứa các bản ghi thỏa mãn điều kiện
         filtered_df = df[phone_mask]
 
         # Debug info
         logger.debug(
-            f"KL RECORDS FILTERING: Records with phone number 0912345678: {phone_mask.sum()}"
+            f"KL RECORDS FILTERING: Records with phone number 0912345678 or 0999999999: {phone_mask.sum()}"
         )
 
         return filtered_df

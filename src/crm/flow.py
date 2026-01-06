@@ -111,7 +111,7 @@ FILTER_RULES = {
                 "name": "kl_test_records_filter",
                 "column": "Số điện thoại",
                 "type": "exclude_equals",
-                "values": ["0912345678"],
+                "values": ["0912345678", "0999999999"],
             },
         ]
     },
@@ -181,7 +181,7 @@ FILTER_RULES = {
                 "name": "kl_test_records_filter",
                 "column": "Số điện thoại",
                 "type": "exclude_equals",
-                "values": ["0912345678"],
+                "values": ["0912345678", "0999999999"],
             },
         ]
     },
@@ -314,7 +314,7 @@ def apply_filters(
                 # Special handling for KL phone number filter
                 if filter_rule.get("name") == "kl_test_records_filter":
                     phone_value = str(value) if value else ""
-                    if phone_value == "0912345678":
+                    if phone_value in ["0912345678", "0999999999"]:
                         is_kl_phone = True
                         should_remove = True
                 elif value and str(value).upper() in [
@@ -345,7 +345,7 @@ def apply_filters(
                     # Check if phone is invalid and not the test phone number
                     if (
                         not is_valid_phone(phone_value)
-                        and phone_value != "0912345678"
+                        and phone_value not in ["0912345678", "0999999999"]
                     ):
                         is_invalid_phone = True
                         should_remove = True
@@ -727,18 +727,18 @@ def process_data():
         )
 
         # Count special phone numbers for statistics FROM FILTERED DATA (after filtering)
-        # Count Khach le from the KL phone records that were filtered out
+        # Count Khach khong cho thong tin from the KL phone records that were filtered out (0999999999, 0912345678)
         khach_le_count = len(kl_online_phones) + len(kl_offline_phones)
 
-        # Count Khach nuoc ngoai from the final filtered data
+        # Count Khach nuoc ngoai from the final filtered data (0900000000 only)
         all_final_filtered_data = filtered_online_data + filtered_offline_data
         khach_nuoc_ngoai_count = sum(
             1
             for record in all_final_filtered_data
-            if record.get("So_Dien_Thoai") in ["0999999999", "0900000000"]
+            if record.get("So_Dien_Thoai") == "0900000000"
         )
 
-        logger.info(f"Khach le count: {khach_le_count}")
+        logger.info(f"Khach khong cho thong tin count: {khach_le_count}")
         logger.info(f"Khach nuoc ngoai count: {khach_nuoc_ngoai_count}")
 
         # Log sample data if available for debugging
@@ -1086,8 +1086,8 @@ def send_completion_email(
         filtered_online_data: Final processed online data
         filtered_offline_data: Final processed offline data
         negative_records: Records with negative values
-        khach_le_count: Number of records with phone 0912345678
-        khach_nuoc_ngoai_count: Number of records with phone 09999999999 or 090000000
+        khach_le_count: Number of records with phone 0912345678 or 0999999999 (khach khong cho thong tin)
+        khach_nuoc_ngoai_count: Number of records with phone 0900000000 (khach nuoc ngoai)
     """
     try:
         # Generate timestamp for filenames
@@ -1131,7 +1131,7 @@ def send_completion_email(
         - CRM_Offline_Data_{date_str}.xlsx: Dữ liệu offline đã lọc
         - CRM_Negative_Records_{date_str}.xlsx: Các bản ghi có giá trị âm
 
-        So luong khach le: {khach_le_count}
+        So luong khach khong cho thong tin: {khach_le_count}
         So luong Khach nuoc ngoai: {khach_nuoc_ngoai_count}
 
         Đây là email được gửi tự động.
@@ -1257,7 +1257,7 @@ def send_invalid_phone_email(
             Tệp đính kèm:
             - Invalid_Phone_Online_{date_str}.xlsx: Dữ liệu online có số điện thoại không hợp lệ
 
-            Lưu ý: Đây không bao gồm số điện thoại test (0912345678).
+            Lưu ý: Đây không bao gồm số điện thoại test (0912345678, 0999999999).
 
             Đây là email được gửi tự động.
             """
@@ -1284,7 +1284,7 @@ def send_invalid_phone_email(
             Tệp đính kèm:
             - Invalid_Phone_Offline_{date_str}.xlsx: Dữ liệu offline có số điện thoại không hợp lệ
 
-            Lưu ý: Đây không bao gồm số điện thoại test (0912345678).
+            Lưu ý: Đây không bao gồm số điện thoại test (0912345678, 0999999999).
 
             Đây là email được gửi tự động.
             """
@@ -1310,7 +1310,7 @@ def send_invalid_phone_email(
             Tệp đính kèm:
             - Invalid_Phone_Online_{date_str}.xlsx: Dữ liệu online có số điện thoại không hợp lệ
 
-            Lưu ý: Đây không bao gồm số điện thoại test (0912345678).
+            Lưu ý: Đây không bao gồm số điện thoại test (0912345678, 0999999999).
 
             Đây là email được gửi tự động.
             """
@@ -1336,7 +1336,7 @@ def send_invalid_phone_email(
             Tệp đính kèm:
             - Invalid_Phone_Offline_{date_str}.xlsx: Dữ liệu offline có số điện thoại không hợp lệ
 
-            Lưu ý: Đây không bao gồm số điện thoại test (0912345678).
+            Lưu ý: Đây không bao gồm số điện thoại test (0912345678, 0999999999).
 
             Đây là email được gửi tự động.
             """

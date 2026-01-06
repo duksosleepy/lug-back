@@ -31,7 +31,7 @@ def is_valid_phone(phone: str) -> bool:
     phone_str = re.sub(r"[-()\s\.\+]", "", phone_str)
 
     # Kiểm tra số điện thoại đặc biệt
-    if phone_str in ["09999999999", "090000000", "0912345678"]:
+    if phone_str in ["09999999999", "090000000", "0912345678", "0999999999"]:
         return True
 
     # Chuẩn hóa số điện thoại
@@ -76,7 +76,7 @@ def format_phone_number(phone: str) -> Optional[str]:
     phone_str = re.sub(r"[-()\s\.\+]", "", phone_str)
 
     # Giữ nguyên số điện thoại đặc biệt
-    if phone_str in ["09999999999", "090000000", "0912345678"]:
+    if phone_str in ["09999999999", "090000000", "0912345678", "0999999999"]:
         return phone_str
 
     # Chuẩn hóa số điện thoại
