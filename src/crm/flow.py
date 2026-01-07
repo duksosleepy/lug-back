@@ -343,10 +343,10 @@ def apply_filters(
                 if function_name == "is_valid_phone":
                     phone_value = str(value) if value else ""
                     # Check if phone is invalid and not the test phone number
-                    if (
-                        not is_valid_phone(phone_value)
-                        and phone_value not in ["0912345678", "0999999999"]
-                    ):
+                    if not is_valid_phone(phone_value) and phone_value not in [
+                        "0912345678",
+                        "0999999999",
+                    ]:
                         is_invalid_phone = True
                         should_remove = True
 
@@ -1333,9 +1333,9 @@ def send_invalid_phone_email(
             Tóm tắt:
             - Số bản ghi offline có số điện thoại không hợp lệ: {len(invalid_offline_records)}
 
+
             Tệp đính kèm:
             - Invalid_Phone_Offline_{date_str}.xlsx: Dữ liệu offline có số điện thoại không hợp lệ
-
             Lưu ý: Đây không bao gồm số điện thoại test (0912345678, 0999999999).
 
             Đây là email được gửi tự động.
