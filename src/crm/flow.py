@@ -111,7 +111,7 @@ FILTER_RULES = {
                 "name": "kl_test_records_filter",
                 "column": "Số điện thoại",
                 "type": "exclude_equals",
-                "values": ["0912345678", "0999999999"],
+                "values": ["0912345678"],
             },
         ]
     },
@@ -181,7 +181,7 @@ FILTER_RULES = {
                 "name": "kl_test_records_filter",
                 "column": "Số điện thoại",
                 "type": "exclude_equals",
-                "values": ["0912345678", "0999999999"],
+                "values": ["0912345678"],
             },
         ]
     },
@@ -314,7 +314,7 @@ def apply_filters(
                 # Special handling for KL phone number filter
                 if filter_rule.get("name") == "kl_test_records_filter":
                     phone_value = str(value) if value else ""
-                    if phone_value in ["0912345678", "0999999999"]:
+                    if phone_value in ["0912345678"]:
                         is_kl_phone = True
                         should_remove = True
                 elif value and str(value).upper() in [
@@ -345,7 +345,6 @@ def apply_filters(
                     # Check if phone is invalid and not the test phone number
                     if not is_valid_phone(phone_value) and phone_value not in [
                         "0912345678",
-                        "0999999999",
                     ]:
                         is_invalid_phone = True
                         should_remove = True
@@ -421,10 +420,32 @@ def transform_data(sales_data: List[Dict]) -> List[Dict]:
 
 
 async def send_kl_records_to_api(kl_records: List[Dict]) -> Dict:
-    """Send KL phone number records to the API endpoint"""
+    """Send KL phone number records (0912345678 only) to the API endpoint"""
     if not kl_records:
         logger.info("No KL phone records to send")
         return {"status": "no_data", "message": "No KL phone records to send"}
+
+    # Safety filter: Only process records with phone number 0912345678
+    kl_records_filtered = [
+        record
+        for record in kl_records
+        if record.get("So_Dien_Thoai") == "0912345678"
+    ]
+
+    if not kl_records_filtered:
+        logger.warning(
+            f"Filtered out {len(kl_records)} records - none had phone number 0912345678"
+        )
+        return {
+            "status": "no_data",
+            "message": "No records with phone 0912345678 to send",
+        }
+
+    if len(kl_records_filtered) != len(kl_records):
+        logger.warning(
+            f"Filtered KL records: {len(kl_records)} -> {len(kl_records_filtered)} "
+            f"(removed {len(kl_records) - len(kl_records_filtered)} non-0912345678 records)"
+        )
 
     try:
         # Get the API endpoint and token from settings
@@ -441,7 +462,7 @@ async def send_kl_records_to_api(kl_records: List[Dict]) -> Dict:
 
         # Transform KL records to the required API format
         transformed_records = []
-        for record in kl_records:
+        for record in kl_records_filtered:
             # Convert date format from datetime to YYYY-MM-DD if needed
             date_str = record.get("Ngay_Ct", "")
             if date_str and len(date_str) >= 10:
@@ -512,14 +533,14 @@ async def send_kl_records_to_api(kl_records: List[Dict]) -> Dict:
         return {
             "status": "error",
             "message": f"Failed to send KL phone records to API: {e}",
-            "records_attempted": len(kl_records),
+            "records_attempted": len(kl_records_filtered),
         }
     except Exception as e:
         logger.error(f"Unexpected error sending KL phone records: {e}")
         return {
             "status": "error",
             "message": f"Unexpected error sending KL phone records: {e}",
-            "records_attempted": len(kl_records),
+            "records_attempted": len(kl_records_filtered),
         }
 
 
@@ -727,18 +748,22 @@ def process_data():
         )
 
         # Count special phone numbers for statistics FROM FILTERED DATA (after filtering)
-        # Count Khach khong cho thong tin from the KL phone records that were filtered out (0999999999, 0912345678)
-        khach_le_count = len(kl_online_phones) + len(kl_offline_phones)
+        # Count Khach khong cho thong tin from records with phone 0999999999 only
+        all_final_filtered_data = filtered_online_data + filtered_offline_data
+        kkctt_count = sum(
+            1
+            for record in all_final_filtered_data
+            if record.get("So_Dien_Thoai") == "0999999999"
+        )
 
         # Count Khach nuoc ngoai from the final filtered data (0900000000 only)
-        all_final_filtered_data = filtered_online_data + filtered_offline_data
         khach_nuoc_ngoai_count = sum(
             1
             for record in all_final_filtered_data
             if record.get("So_Dien_Thoai") == "0900000000"
         )
 
-        logger.info(f"Khach khong cho thong tin count: {khach_le_count}")
+        logger.info(f"Khach khong cho thong tin count: {kkctt_count}")
         logger.info(f"Khach nuoc ngoai count: {khach_nuoc_ngoai_count}")
 
         # Log sample data if available for debugging
@@ -757,9 +782,17 @@ def process_data():
         logger.info(f"Transformed data into {len(batch_data)} batch requests")
 
         # Step 7: Send KL phone records to API if any exist (before batch submission)
-        kl_records = kl_online_phones + kl_offline_phones
+        # Filter to ensure only 0912345678 records are sent
+        all_kl_records = kl_online_phones + kl_offline_phones
+        kl_records = [
+            record
+            for record in all_kl_records
+            if record.get("So_Dien_Thoai") == "0912345678"
+        ]
         if kl_records:
-            logger.info("Sending KL phone records to API...")
+            logger.info(
+                f"Sending {len(kl_records)} KL phone records (0912345678 only) to API..."
+            )
             kl_result = asyncio.run(send_kl_records_to_api(kl_records))
             logger.info(f"KL phone records API result: {kl_result}")
 
@@ -782,7 +815,7 @@ def process_data():
                 filtered_online_data,
                 filtered_offline_data,
                 negative_records,
-                khach_le_count,
+                kkctt_count,
                 khach_nuoc_ngoai_count,
             )
 
@@ -793,7 +826,7 @@ def process_data():
             )
             # Send email even if no data to submit
             send_completion_email(
-                [], [], negative_records, khach_le_count, khach_nuoc_ngoai_count
+                [], [], negative_records, kkctt_count, khach_nuoc_ngoai_count
             )
             return {"status": "no_data", "message": "No data to submit"}
 
@@ -1077,7 +1110,7 @@ def send_completion_email(
     filtered_online_data: List[Dict],
     filtered_offline_data: List[Dict],
     negative_records: List[Dict],
-    khach_le_count: int,
+    kkctt_count: int,
     khach_nuoc_ngoai_count: int,
 ):
     """Send completion email with Excel attachments.
@@ -1086,7 +1119,7 @@ def send_completion_email(
         filtered_online_data: Final processed online data
         filtered_offline_data: Final processed offline data
         negative_records: Records with negative values
-        khach_le_count: Number of records with phone 0912345678 or 0999999999 (khach khong cho thong tin)
+        kkctt_count: Number of records with phone 0999999999 (khach khong cho thong tin)
         khach_nuoc_ngoai_count: Number of records with phone 0900000000 (khach nuoc ngoai)
     """
     try:
@@ -1131,8 +1164,8 @@ def send_completion_email(
         - CRM_Offline_Data_{date_str}.xlsx: Dữ liệu offline đã lọc
         - CRM_Negative_Records_{date_str}.xlsx: Các bản ghi có giá trị âm
 
-        So luong khach khong cho thong tin: {khach_le_count}
-        So luong Khach nuoc ngoai: {khach_nuoc_ngoai_count}
+        Số lượng khách không cho thông tin: {kkctt_count}
+        Số lượng khách nước ngoài: {khach_nuoc_ngoai_count}
 
         Đây là email được gửi tự động.
         """
@@ -1257,7 +1290,7 @@ def send_invalid_phone_email(
             Tệp đính kèm:
             - Invalid_Phone_Online_{date_str}.xlsx: Dữ liệu online có số điện thoại không hợp lệ
 
-            Lưu ý: Đây không bao gồm số điện thoại test (0912345678, 0999999999).
+            Lưu ý: Đây không bao gồm số điện thoại test (0912345678).
 
             Đây là email được gửi tự động.
             """
@@ -1284,7 +1317,7 @@ def send_invalid_phone_email(
             Tệp đính kèm:
             - Invalid_Phone_Offline_{date_str}.xlsx: Dữ liệu offline có số điện thoại không hợp lệ
 
-            Lưu ý: Đây không bao gồm số điện thoại test (0912345678, 0999999999).
+            Lưu ý: Đây không bao gồm số điện thoại test (0912345678).
 
             Đây là email được gửi tự động.
             """
@@ -1310,7 +1343,7 @@ def send_invalid_phone_email(
             Tệp đính kèm:
             - Invalid_Phone_Online_{date_str}.xlsx: Dữ liệu online có số điện thoại không hợp lệ
 
-            Lưu ý: Đây không bao gồm số điện thoại test (0912345678, 0999999999).
+            Lưu ý: Đây không bao gồm số điện thoại test (0912345678).
 
             Đây là email được gửi tự động.
             """
@@ -1336,7 +1369,7 @@ def send_invalid_phone_email(
 
             Tệp đính kèm:
             - Invalid_Phone_Offline_{date_str}.xlsx: Dữ liệu offline có số điện thoại không hợp lệ
-            Lưu ý: Đây không bao gồm số điện thoại test (0912345678, 0999999999).
+            Lưu ý: Đây không bao gồm số điện thoại test (0912345678).
 
             Đây là email được gửi tự động.
             """
