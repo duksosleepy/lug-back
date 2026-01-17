@@ -33,7 +33,11 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["basedpyright>=1.29.1", "ruff>=0.11.8"]
+dev = [
+    "basedpyright>=1.29.1",
+    "pytest>=9.0.2",
+    "ruff>=0.11.8",
+]
 
 [build-system]
 requires = ["hatchling"]

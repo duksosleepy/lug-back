@@ -930,16 +930,18 @@ def filter_negative_records(data: List[Dict]) -> List[Dict]:
 
     for item in data:
         # Check if Doanh_Thu or So_Luong is negative
-        doanh_thu = item.get("Doanh_Thu", 0)
-        so_luong = item.get("So_Luong", 0)
+        doanh_thu_raw = item.get("Doanh_Thu", 0)
+        so_luong_raw = item.get("So_Luong", 0)
 
-        # Convert to float for comparison if possible
+        # Convert each field separately to avoid one bad value resetting both
         try:
-            doanh_thu = float(doanh_thu) if doanh_thu is not None else 0
-            so_luong = float(so_luong) if so_luong is not None else 0
+            doanh_thu = float(doanh_thu_raw) if doanh_thu_raw is not None else 0
         except (ValueError, TypeError):
-            # If conversion fails, assume non-negative
             doanh_thu = 0
+
+        try:
+            so_luong = float(so_luong_raw) if so_luong_raw is not None else 0
+        except (ValueError, TypeError):
             so_luong = 0
 
         if doanh_thu < 0 or so_luong < 0:
