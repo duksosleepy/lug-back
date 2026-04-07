@@ -376,44 +376,54 @@ def apply_filters(
 
 def transform_data(sales_data: List[Dict]) -> List[Dict]:
     """Transform the sales data to the format required by the batch service
-    Each individual record is treated as a separate submission"""
-    transformed_data = []
-
+    Records with the same maDonHang are combined into a single request with multiple detail items"""
+    # Group records by maDonHang
+    orders_by_ma_don_hang = {}
+    
     for item in sales_data:
+        ma_don_hang = item.get("Ma_Don_Hang")
+        
         # Extract date part only from datetime string (YYYY-MM-DD)
         date_str = item.get("Ngay_Ct", "")
         if date_str and len(date_str) >= 10:
             date_str = date_str[:10]
-
-        # Create a single record with master and detail
-        record = {
-            "master": {
-                "ngayCT": date_str,
-                "maCT": item.get("Ma_Ct"),
-                "soCT": item.get("So_Ct"),
-                "maBoPhan": item.get("Ma_BP"),
-                "maDonHang": item.get("Ma_Don_Hang"),
-                "tenKhachHang": item.get("Ten_Khach_Hang"),
-                "soDienThoai": item.get("So_Dien_Thoai"),
-                "tinhThanh": item.get("Tinh_Thanh"),
-                "quanHuyen": item.get("Quan_Huyen"),
-                "phuongXa": item.get("Phuong_Xa"),
-                "diaChi": item.get("Dia_Chi"),
-            },
-            "detail": [
-                {
-                    "maHang": item.get("Ma_Hang_Old"),
-                    "tenHang": item.get("Ten_Hang"),
-                    "imei": item.get("Imei"),
-                    "soLuong": item.get("So_Luong"),
-                    "doanhThu": item.get("Doanh_Thu") or 0,
-                }
-            ],
+        
+        # Create detail item for this record
+        detail_item = {
+            "maHang": item.get("Ma_Hang_Old"),
+            "tenHang": item.get("Ten_Hang"),
+            "imei": item.get("Imei"),
+            "soLuong": item.get("So_Luong"),
+            "doanhThu": item.get("Doanh_Thu") or 0,
         }
-
-        # Add to the batch data
+        
+        # If this maDonHang hasn't been seen, create master record
+        if ma_don_hang not in orders_by_ma_don_hang:
+            orders_by_ma_don_hang[ma_don_hang] = {
+                "master": {
+                    "ngayCT": date_str,
+                    "maCT": item.get("Ma_Ct"),
+                    "soCT": item.get("So_Ct"),
+                    "maBoPhan": item.get("Ma_BP"),
+                    "maDonHang": ma_don_hang,
+                    "tenKhachHang": item.get("Ten_Khach_Hang"),
+                    "soDienThoai": item.get("So_Dien_Thoai"),
+                    "tinhThanh": item.get("Tinh_Thanh"),
+                    "quanHuyen": item.get("Quan_Huyen"),
+                    "phuongXa": item.get("Phuong_Xa"),
+                    "diaChi": item.get("Dia_Chi"),
+                },
+                "detail": []
+            }
+        
+        # Add detail item to this order's detail list
+        orders_by_ma_don_hang[ma_don_hang]["detail"].append(detail_item)
+    
+    # Convert grouped orders to batch format
+    transformed_data = []
+    for ma_don_hang, order_data in orders_by_ma_don_hang.items():
         transformed_data.append(
-            {"url": TARGET_URL, "data": {"apikey": API_KEY, "data": [record]}}
+            {"url": TARGET_URL, "data": {"apikey": API_KEY, "data": [order_data]}}
         )
 
     return transformed_data
