@@ -46,7 +46,7 @@ celery_app.conf.update(
         },
         "crm-data-sync": {
             "task": "src.crm.tasks.sync_crm_data",
-            "schedule": crontab(hour=15, minute=45),  # Run at 8:30 AM daily
+            "schedule": crontab(hour=10, minute=35),  # Run at 8:30 AM daily
             "args": (),
         },
     },
@@ -461,9 +461,15 @@ def sync_pending_registrations(self):
                         if crm_target_url and crm_api_key:
                             # IMPORTANT: Use user's submitted data from pending registration
                             # Log original data vs user data for debugging
-                            logger.info(f"=== REVERSE MATCH CRM INTEGRATION DEBUG ===")
-                            logger.info(f"User submitted - Name: '{customer_name}', Phone: '{formatted_phone}'")
-                            logger.info(f"Original order - Name: '{order_records[0].get('ten_khach_hang', 'N/A')}', Phone: '{order_records[0].get('so_dien_thoai', 'N/A')}'")
+                            logger.info(
+                                "=== REVERSE MATCH CRM INTEGRATION DEBUG ==="
+                            )
+                            logger.info(
+                                f"User submitted - Name: '{customer_name}', Phone: '{formatted_phone}'"
+                            )
+                            logger.info(
+                                f"Original order - Name: '{order_records[0].get('ten_khach_hang', 'N/A')}', Phone: '{order_records[0].get('so_dien_thoai', 'N/A')}'"
+                            )
 
                             # Group all products under ONE master record for the order (match server.py structure)
                             # Use first record for master data (all records have same order info)
@@ -487,13 +493,17 @@ def sync_pending_registrations(self):
                                 # Ensure numeric fields are properly formatted
                                 so_luong = record.get("so_luong", "1")
                                 try:
-                                    so_luong = int(float(so_luong)) if so_luong else 1
+                                    so_luong = (
+                                        int(float(so_luong)) if so_luong else 1
+                                    )
                                 except (ValueError, TypeError):
                                     so_luong = 1
 
                                 doanh_thu = record.get("doanh_thu", "0")
                                 try:
-                                    doanh_thu = float(doanh_thu) if doanh_thu else 0
+                                    doanh_thu = (
+                                        float(doanh_thu) if doanh_thu else 0
+                                    )
                                 except (ValueError, TypeError):
                                     doanh_thu = 0
 
@@ -512,11 +522,17 @@ def sync_pending_registrations(self):
                                 "master": {
                                     "ngayCT": date_str,
                                     "maCT": first_record.get("ma_ct", ""),
-                                    "soCT": first_record.get("so_ct", "").zfill(4)
+                                    "soCT": first_record.get("so_ct", "").zfill(
+                                        4
+                                    )
                                     if first_record.get("so_ct")
                                     else "0001",  # Zero-pad to 4 digits
-                                    "maBoPhan": first_record.get("ma_bo_phan", ""),
-                                    "maDonHang": first_record.get("ma_don_hang", ""),
+                                    "maBoPhan": first_record.get(
+                                        "ma_bo_phan", ""
+                                    ),
+                                    "maDonHang": first_record.get(
+                                        "ma_don_hang", ""
+                                    ),
                                     "tenKhachHang": customer_name,  # MUST use user's submitted name from pending registration
                                     "soDienThoai": formatted_phone,  # MUST use user's submitted phone from pending registration
                                     "tinhThanh": tinh_thanh,
@@ -530,7 +546,9 @@ def sync_pending_registrations(self):
                             # Prepare CRM payload with single record containing all products
                             crm_payload = {
                                 "apikey": crm_api_key,
-                                "data": [crm_record],  # Single record with all products
+                                "data": [
+                                    crm_record
+                                ],  # Single record with all products
                             }
 
                             logger.info(
@@ -539,7 +557,10 @@ def sync_pending_registrations(self):
 
                             # Debug: Log the EXACT CRM record being sent to verify user data is used
                             import json
-                            logger.info(f"CRM master record - tenKhachHang: '{crm_record['master']['tenKhachHang']}', soDienThoai: '{crm_record['master']['soDienThoai']}'")
+
+                            logger.info(
+                                f"CRM master record - tenKhachHang: '{crm_record['master']['tenKhachHang']}', soDienThoai: '{crm_record['master']['soDienThoai']}'"
+                            )
                             logger.info(
                                 f"Full CRM payload (reverse match): {json.dumps(crm_record, ensure_ascii=False, indent=2)}"
                             )
@@ -555,15 +576,21 @@ def sync_pending_registrations(self):
                             logger.info(
                                 f"CRM Response Status (reverse match): {crm_response.status_code}"
                             )
-                            logger.info(f"CRM Response Body (reverse match): {crm_response_text}")
+                            logger.info(
+                                f"CRM Response Body (reverse match): {crm_response_text}"
+                            )
 
                             if crm_response.status_code in (200, 201):
-                                logger.info("Successfully sent reverse match warranty order to CRM")
+                                logger.info(
+                                    "Successfully sent reverse match warranty order to CRM"
+                                )
                                 # Try to parse CRM response
                                 try:
                                     crm_result = crm_response.json()
                                     if crm_result.get("status") == 1:
-                                        logger.info("CRM confirmed successful import (reverse match)")
+                                        logger.info(
+                                            "CRM confirmed successful import (reverse match)"
+                                        )
                                     else:
                                         logger.warning(
                                             f"CRM import had issues (reverse match): {crm_result}"
@@ -590,15 +617,24 @@ def sync_pending_registrations(self):
 
                     # 5.2. Send matched customer data via email using Apprise
                     try:
-                        logger.info("Sending reverse match warranty data via email using Apprise")
+                        logger.info(
+                            "Sending reverse match warranty data via email using Apprise"
+                        )
                         email_sent = send_warranty_match_email(records_to_copy)
                         if email_sent:
-                            logger.info("Successfully sent reverse match warranty data via email")
+                            logger.info(
+                                "Successfully sent reverse match warranty data via email"
+                            )
                         else:
-                            logger.warning("Failed to send reverse match warranty data via email")
+                            logger.warning(
+                                "Failed to send reverse match warranty data via email"
+                            )
                     except Exception as email_e:
                         # Email notification failure should not affect warranty registration
-                        logger.error(f"Email notification error for reverse match (non-blocking): {str(email_e)}", exc_info=True)
+                        logger.error(
+                            f"Email notification error for reverse match (non-blocking): {str(email_e)}",
+                            exc_info=True,
+                        )
                         # Continue with warranty process even if email fails
 
                     # 6. Xóa bản ghi gốc từ bảng chính

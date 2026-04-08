@@ -377,17 +377,34 @@ def apply_filters(
 def transform_data(sales_data: List[Dict]) -> List[Dict]:
     """Transform the sales data to the format required by the batch service
     Records with the same maDonHang are combined into a single request with multiple detail items"""
+    logger.info(f"transform_data: Processing {len(sales_data)} input records")
+
     # Group records by maDonHang
     orders_by_ma_don_hang = {}
-    
-    for item in sales_data:
+
+    for idx, item in enumerate(sales_data):
         ma_don_hang = item.get("Ma_Don_Hang")
-        
+
+        # Check for None or empty Ma_Don_Hang
+        if not ma_don_hang:
+            logger.warning(
+                f"  Record {idx}: Ma_Don_Hang is None or empty! "
+                f"Ma_Hang_Old={item.get('Ma_Hang_Old')}, skipping record"
+            )
+            continue
+
+        # DEBUG: Log each record being processed
+        ma_hang = item.get("Ma_Hang_Old")
+        logger.debug(
+            f"  Record {idx}: Ma_Don_Hang='{ma_don_hang}' (repr={repr(ma_don_hang)}), "
+            f"Ma_Hang_Old='{ma_hang}', existing_keys={list(orders_by_ma_don_hang.keys())}"
+        )
+
         # Extract date part only from datetime string (YYYY-MM-DD)
         date_str = item.get("Ngay_Ct", "")
         if date_str and len(date_str) >= 10:
             date_str = date_str[:10]
-        
+
         # Create detail item for this record
         detail_item = {
             "maHang": item.get("Ma_Hang_Old"),
@@ -396,9 +413,10 @@ def transform_data(sales_data: List[Dict]) -> List[Dict]:
             "soLuong": item.get("So_Luong"),
             "doanhThu": item.get("Doanh_Thu") or 0,
         }
-        
+
         # If this maDonHang hasn't been seen, create master record
         if ma_don_hang not in orders_by_ma_don_hang:
+            logger.debug(f"    → Creating NEW order group for '{ma_don_hang}'")
             orders_by_ma_don_hang[ma_don_hang] = {
                 "master": {
                     "ngayCT": date_str,
@@ -413,19 +431,38 @@ def transform_data(sales_data: List[Dict]) -> List[Dict]:
                     "phuongXa": item.get("Phuong_Xa"),
                     "diaChi": item.get("Dia_Chi"),
                 },
-                "detail": []
+                "detail": [],
             }
-        
+
         # Add detail item to this order's detail list
+        else:
+            logger.debug(
+                f"    → APPENDING to existing order group '{ma_don_hang}'"
+            )
+
         orders_by_ma_don_hang[ma_don_hang]["detail"].append(detail_item)
-    
+        logger.debug(
+            f"    → Total detail items for '{ma_don_hang}': "
+            f"{len(orders_by_ma_don_hang[ma_don_hang]['detail'])}"
+        )
+
     # Convert grouped orders to batch format
     transformed_data = []
     for ma_don_hang, order_data in orders_by_ma_don_hang.items():
+        detail_count = len(order_data.get("detail", []))
+        logger.info(
+            f"transform_data: maDonHang={ma_don_hang} has {detail_count} detail item(s)"
+        )
         transformed_data.append(
-            {"url": TARGET_URL, "data": {"apikey": API_KEY, "data": [order_data]}}
+            {
+                "url": TARGET_URL,
+                "data": {"apikey": API_KEY, "data": [order_data]},
+            }
         )
 
+    logger.info(
+        f"transform_data: Created {len(transformed_data)} batch requests from {len(sales_data)} input records"
+    )
     return transformed_data
 
 
@@ -572,6 +609,25 @@ def submit_batch(batch_data: List[Dict]) -> Dict:
     for i in range(0, len(batch_data), chunk_size):
         chunk = batch_data[i : i + chunk_size]
         chunk_number = i // chunk_size + 1
+
+        # Log detail counts for each request in chunk
+        for idx, req in enumerate(chunk):
+            try:
+                detail_count = len(
+                    req.get("data", {}).get("data", [{}])[0].get("detail", [])
+                )
+                ma_don_hang = (
+                    req.get("data", {})
+                    .get("data", [{}])[0]
+                    .get("master", {})
+                    .get("maDonHang", "UNKNOWN")
+                )
+                logger.info(
+                    f"Chunk {chunk_number} request {idx}: maDonHang={ma_don_hang} with {detail_count} detail item(s)"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to log request detail count: {e}")
+
         logger.info(
             f"Submitting chunk {chunk_number}/{total_chunks} with {len(chunk)} requests"
         )
