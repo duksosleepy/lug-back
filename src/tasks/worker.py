@@ -46,7 +46,7 @@ celery_app.conf.update(
         },
         "crm-data-sync": {
             "task": "src.crm.tasks.sync_crm_data",
-            "schedule": crontab(hour=10, minute=45),  # Run at 10:45 AM daily
+            "schedule": crontab(hour=14, minute=30),  # Run at 10:45 AM daily
             "args": (),
         },
     },
