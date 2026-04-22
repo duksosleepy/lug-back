@@ -548,6 +548,88 @@ async def process_mapping(
         )
 
 
+@app.post("/compare-excel")
+async def compare_excel(
+    gmailFile: UploadFile = File(...), systemFile: UploadFile = File(...)
+):
+    """
+    Endpoint so sánh hai file Excel và trả về các bản ghi chỉ có trong Gmail file.
+
+    Nhận hai file:
+    - gmailFile: File Excel từ Gmail (file báo cáo từ Gmail)
+    - systemFile: File Excel từ hệ thống (file từ hệ thống xuất xuống)
+
+    So sánh dựa trên composite key [Mã đơn hàng + Doanh Thu]
+    Trả về JSON chứa base64 của file Excel với các bản ghi chỉ có trong Gmail file.
+    """
+    if not gmailFile:
+        raise HTTPException(status_code=400, detail="gmailFile là bắt buộc")
+    if not systemFile:
+        raise HTTPException(status_code=400, detail="systemFile là bắt buộc")
+
+    logger.info(
+        f"Đang so sánh Excel files. Gmail file: {gmailFile.filename}, System file: {systemFile.filename}"
+    )
+
+    # Kiểm tra định dạng file
+    validate_excel_file(gmailFile.filename)
+    validate_excel_file(systemFile.filename)
+
+    try:
+        from processors.excel_comparison_processor import (
+            ExcelComparisonProcessor,
+        )
+
+        # Đọc nội dung file
+        gmail_content = await gmailFile.read()
+        system_content = await systemFile.read()
+
+        # Đảm bảo nội dung không rỗng
+        if not gmail_content:
+            raise HTTPException(status_code=400, detail="Gmail file trống")
+        if not system_content:
+            raise HTTPException(status_code=400, detail="System file trống")
+
+        # Tạo buffer cho các file đầu vào và đầu ra
+        gmail_buffer = io.BytesIO(gmail_content)
+        system_buffer = io.BytesIO(system_content)
+        output_buffer = io.BytesIO()
+
+        # Xử lý so sánh
+        processor = ExcelComparisonProcessor(gmail_buffer, system_buffer)
+        comparison_stats = processor.process_to_buffer(output_buffer)
+
+        # Mã hóa nội dung file sang base64
+        output_buffer.seek(0)
+        result_file_b64 = base64.b64encode(output_buffer.getvalue()).decode(
+            "utf-8"
+        )
+
+        # Tạo tên file kết quả
+        output_filename = (
+            f"{Path(gmailFile.filename).stem}_only_in_gmail.xlsx"
+        )
+
+        logger.info(
+            f"Comparison completed. Records only in Gmail: {comparison_stats['only_gmail_count']}"
+        )
+
+        # Trả về JSON với thông tin thống kê
+        return {
+            "resultFile": result_file_b64,
+            "filename": output_filename,
+            "onlyGmailCount": comparison_stats["only_gmail_count"],
+            "totalGmail": comparison_stats["total_gmail"],
+            "totalSystem": comparison_stats["total_system"],
+        }
+
+    except Exception as e:
+        logger.error(f"Lỗi khi so sánh Excel files: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=400, detail=f"Lỗi khi so sánh Excel files: {str(e)}"
+        )
+
+
 class WarrantyRequest(BaseModel):
     name: str
     phone: str

@@ -1193,10 +1193,15 @@ def send_completion_email(
     try:
         # Generate timestamp for filenames
         task_runtime = datetime.now()
-        previous_day_same_time = task_runtime - timedelta(days=2)
 
-        # Format date for filename: YYYYMMDD (use previous day as reference)
-        date_str = previous_day_same_time.strftime("%Y%m%d")
+        # Calculate the actual data retrieval date range (same logic as in fetch_data)
+        current_day_midnight = task_runtime.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        target_day_start = current_day_midnight - timedelta(days=3)
+
+        # Format date for filename: YYYYMMDD (use target_day_start to match email message)
+        date_str = target_day_start.strftime("%Y%m%d")
 
         # Create separate Excel files with shorter naming
         online_data_file = create_excel_file(
@@ -1211,11 +1216,6 @@ def send_completion_email(
 
         # Send email with all attachments using shorter names
         subject = f"CRM Data Processing Completed - {date_str}"
-        # Calculate the actual data retrieval date range (same logic as in fetch_data)
-        current_day_midnight = task_runtime.replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
-        target_day_start = current_day_midnight - timedelta(days=3)
 
         body = f"""
         Xử lý dữ liệu CRM thành công.
