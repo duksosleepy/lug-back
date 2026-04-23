@@ -114,10 +114,22 @@ class ExcelComparisonProcessor:
                 f"Records only in Gmail file: {len(only_in_gmail_sorted)}"
             )
 
+            # Create a display dataframe for proper date formatting
+            display_df = only_in_gmail_sorted.copy()
+
+            # Process "Ngày Ct" column to ensure DD/MM/YYYY format
+            if "Ngày Ct" in display_df.columns:
+                display_df["Ngày Ct"] = (
+                    pd.to_datetime(display_df["Ngày Ct"], errors="coerce")
+                    .dt.strftime("%d/%m/%Y")
+                    .fillna("")
+                )
+                logger.info("Formatted 'Ngày Ct' column to DD/MM/YYYY format")
+
             # Write to Excel buffer - cast to BytesIO to satisfy type checker
             output_bytes = BytesIO() if not isinstance(output_buffer, BytesIO) else output_buffer
             with pd.ExcelWriter(output_bytes, engine="openpyxl") as writer:
-                only_in_gmail_sorted.to_excel(
+                display_df.to_excel(
                     writer, index=False, sheet_name="Only in Gmail"
                 )
 

@@ -973,6 +973,14 @@ def create_excel_file(data: List[Dict], filename: str) -> str:
     # Create DataFrame and save to Excel
     df = pd.DataFrame(rows, columns=headers)
 
+    # Process "Ngày Ct" column to ensure DD/MM/YYYY format
+    if "Ngày Ct" in df.columns:
+        df["Ngày Ct"] = (
+            pd.to_datetime(df["Ngày Ct"], errors="coerce")
+            .dt.strftime("%d/%m/%Y")
+            .fillna("")
+        )
+
     # Create a temporary file
     with NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
         temp_file_path = tmp.name
