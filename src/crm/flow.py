@@ -763,6 +763,51 @@ def process_data():
             apply_filters(offline_data, is_online=False)
         )
 
+        # Step 4.5: Remove negative records from filtered data
+        # Negative records should be excluded from processing but included in the email report
+        logger.info("Removing negative records from filtered online data...")
+        negative_record_ids = {
+            (
+                item.get("So_Ct"),
+                item.get("Ma_Ct"),
+                item.get("Ten_Khach_Hang"),
+                item.get("So_Dien_Thoai"),
+                item.get("Ma_Hang_Old"),
+            )
+            for item in negative_records
+        }
+
+        filtered_online_data_before = len(filtered_online_data)
+        filtered_online_data = [
+            item for item in filtered_online_data
+            if (
+                item.get("So_Ct"),
+                item.get("Ma_Ct"),
+                item.get("Ten_Khach_Hang"),
+                item.get("So_Dien_Thoai"),
+                item.get("Ma_Hang_Old"),
+            ) not in negative_record_ids
+        ]
+        logger.info(
+            f"Removed {filtered_online_data_before - len(filtered_online_data)} negative records from online data"
+        )
+
+        logger.info("Removing negative records from filtered offline data...")
+        filtered_offline_data_before = len(filtered_offline_data)
+        filtered_offline_data = [
+            item for item in filtered_offline_data
+            if (
+                item.get("So_Ct"),
+                item.get("Ma_Ct"),
+                item.get("Ten_Khach_Hang"),
+                item.get("So_Dien_Thoai"),
+                item.get("Ma_Hang_Old"),
+            ) not in negative_record_ids
+        ]
+        logger.info(
+            f"Removed {filtered_offline_data_before - len(filtered_offline_data)} negative records from offline data"
+        )
+
         # Step 5: Combine filtered data
         all_filtered_data = filtered_online_data + filtered_offline_data
         logger.info(
