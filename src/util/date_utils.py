@@ -5,6 +5,10 @@ Di chuyển từ src/sapo_sync/utils.py
 
 from datetime import datetime, timedelta
 
+from typing import Any
+
+import pandas as pd
+
 from src.util.logging import get_logger
 
 logger = get_logger(__name__)
@@ -44,6 +48,20 @@ def convert_to_gmt7(iso_datetime_str):
     except Exception:
         # Nếu có lỗi, giữ nguyên chuỗi gốc
         return iso_datetime_str
+
+
+def format_ngay_ct(series: Any) -> "pd.Series[str]":
+    """
+    Normalize a Ngày Ct column to dd/mm/yyyy string format.
+
+    Accepts datetime objects, Unix timestamps (ms integers from pandas JSON),
+    or existing dd/mm/yyyy strings. Invalid values become empty strings.
+    """
+    return (
+        pd.to_datetime(series, errors="coerce")
+        .dt.strftime("%d/%m/%Y")
+        .fillna("")
+    )
 
 
 def get_adjusted_dates(start_date: str, end_date: str, format="standard"):

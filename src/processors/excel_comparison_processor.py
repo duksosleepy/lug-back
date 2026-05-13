@@ -11,6 +11,8 @@ from typing import BinaryIO
 import pandas as pd
 from loguru import logger
 
+from src.util.date_utils import format_ngay_ct
+
 
 class ExcelComparisonProcessor:
     """
@@ -119,11 +121,7 @@ class ExcelComparisonProcessor:
 
             # Process "Ngày Ct" column to ensure DD/MM/YYYY format
             if "Ngày Ct" in display_df.columns:
-                display_df["Ngày Ct"] = (
-                    pd.to_datetime(display_df["Ngày Ct"], errors="coerce")
-                    .dt.strftime("%d/%m/%Y")
-                    .fillna("")
-                )
+                display_df["Ngày Ct"] = format_ngay_ct(display_df["Ngày Ct"])
                 logger.info("Formatted 'Ngày Ct' column to DD/MM/YYYY format")
 
             # Write to Excel buffer - cast to BytesIO to satisfy type checker

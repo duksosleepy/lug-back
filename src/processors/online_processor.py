@@ -7,6 +7,7 @@ import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 
+from src.util.date_utils import format_ngay_ct
 from src.util.logging import get_logger
 from src.util.phone_utils import format_phone_number, is_valid_phone
 
@@ -178,6 +179,10 @@ class DaskExcelProcessor:
                 final_df[col] = df_processed[col]
             else:
                 final_df[col] = pd.NA
+
+        if "Ngày Ct" in final_df.columns:
+            final_df["Ngày Ct"] = format_ngay_ct(final_df["Ngày Ct"])
+
         return final_df
 
     def _filter_kl_records(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -241,6 +246,9 @@ class DaskExcelProcessor:
             kl_final_df["Số điện thoại"] = kl_final_df["Số điện thoại"].apply(
                 format_phone_number
             )
+
+            # Normalize date to dd/mm/yyyy string before JSON serialization
+            kl_final_df["Ngày Ct"] = format_ngay_ct(kl_final_df["Ngày Ct"])
 
             # Chuyển đổi thành JSON
             kl_records_json = kl_final_df.to_json(
